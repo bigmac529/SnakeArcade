@@ -15,8 +15,6 @@
 
   const cells = 24;
   const tile = canvas.width / cells;
-  const bestKey = "classic-snake-best";
-  const muteKey = "classic-snake-muted";
   const initialSnake = [
     { x: 11, y: 12 },
     { x: 10, y: 12 },
@@ -24,14 +22,23 @@
   ];
   const paceDelays = { easy: 160, normal: 125, fast: 95 };
   const minDelay = 68;
-  let baseDelay = paceDelays[difficultyEl.value] || 125;
+
+  const nameInput = document.querySelector("#player-name");
+  const nameHint = document.querySelector("#name-hint");
+  const saveSettingsBtn = document.querySelector("#save-settings");
+  const exportSettingsBtn = document.querySelector("#export-settings");
+  const importSettingsInput = document.querySelector("#import-settings");
+
+  let settings = window.SnakeSettings.loadSettings();
+  let settingsFileHandle = null;
+  let baseDelay = paceDelays[settings.difficulty] || paceDelays[difficultyEl.value] || 125;
 
   let snake;
   let food;
   let direction;
   let queuedDirection;
   let score;
-  let best = Number(localStorage.getItem(bestKey) || 0);
+  let best = Number(settings.best || 0);
   let running = false;
   let paused = false;
   let gameOver = false;
@@ -39,13 +46,16 @@
   let moveDelay = baseDelay;
   let touchStart = null;
   let foodPulse = 0;
-  let muted = localStorage.getItem(muteKey) === "1";
+  let muted = Boolean(settings.muted);
   let audioCtx = null;
   let beatBestThisRun = false;
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   bestEl.textContent = best;
+  difficultyEl.value = settings.difficulty in paceDelays ? settings.difficulty : "normal";
+  nameInput.value = settings.playerName || "";
   updateMuteUi();
+  applyName(settings.playerName || "", { silent: true, persist: false });
   reset();
   requestAnimationFrame(loop);
 
@@ -68,8 +78,81 @@
     if (!running) {
       applyPace();
       speedEl.textContent = "1";
+      persistSettings({ difficulty: difficultyEl.value });
       announce(`Pace set to ${difficultyEl.value}.`);
     }
+  });
+
+  nameInput.addEventListener("change", () => {
+    applyName(nameInput.value, { persist: true });
+  });
+  nameInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      applyName(nameInput.value, { persist: true });
+      nameInput.blur();
+    }
+  });
+  saveSettingsBtn.addEventListener("click", async () => {
+    if (!applyName(nameInput.value, { persist: true })) {
+      return;
+    }
+    const saved = persistSettings({});
+    if (window.showSaveFilePicker) {
+      try {
+        settingsFileHandle = settingsFileHandle || await window.showSaveFilePicker({
+          suggestedName: "snake-settings.json",
+          types: [{ description: "JSON", accept: { "application/json": [".json"] } }]
+        });
+        await window.SnakeSettings.maybeWriteLocalFile(saved, settingsFileHandle);
+        nameHint.textContent = "Settings saved to your local JSON file.";
+        nameHint.classList.remove("error");
+        announce("Settings saved to local JSON file.");
+        return;
+      } catch (error) {
+        if (error && error.name === "AbortError") {
+          return;
+        }
+      }
+    }
+    window.SnakeSettings.downloadSettings(saved);
+    nameHint.textContent = "Settings saved in this browser and downloaded as snake-settings.json.";
+    nameHint.classList.remove("error");
+    announce("Settings downloaded as snake-settings.json.");
+  });
+  exportSettingsBtn.addEventListener("click", () => {
+    applyName(nameInput.value, { persist: true });
+    window.SnakeSettings.downloadSettings(persistSettings({}));
+    announce("Downloaded snake-settings.json.");
+  });
+  importSettingsInput.addEventListener("change", async () => {
+    const file = importSettingsInput.files && importSettingsInput.files[0];
+    if (!file) {
+      return;
+    }
+    try {
+      const parsed = JSON.parse(await file.text());
+      const next = window.SnakeSettings.saveSettings({
+        ...window.SnakeSettings.loadSettings(),
+        ...parsed
+      });
+      settings = next;
+      best = Number(next.best || 0);
+      muted = Boolean(next.muted);
+      bestEl.textContent = best;
+      difficultyEl.value = next.difficulty in paceDelays ? next.difficulty : "normal";
+      nameInput.value = next.playerName || "";
+      updateMuteUi();
+      applyPace();
+      applyName(next.playerName || "", { persist: false });
+      nameHint.textContent = "Loaded settings from JSON.";
+      nameHint.classList.remove("error");
+      announce("Settings loaded from JSON.");
+    } catch (_) {
+      nameHint.textContent = "Could not read that JSON file.";
+      nameHint.classList.add("error");
+    }
+    importSettingsInput.value = "";
   });
 
   document.querySelectorAll(".dpad [data-dir]").forEach((btn) => {
@@ -181,12 +264,50 @@
 
   function toggleMute() {
     muted = !muted;
-    localStorage.setItem(muteKey, muted ? "1" : "0");
+    persistSettings({ muted });
     updateMuteUi();
     if (!muted) {
       ensureAudio();
       beep(440, 0.04, "sine", 0.03);
     }
+  }
+
+  function persistSettings(patch) {
+    settings = window.SnakeSettings.saveSettings({
+      ...settings,
+      playerName: nameInput.value.trim(),
+      muted,
+      difficulty: difficultyEl.value,
+      best,
+      ...patch
+    });
+    return settings;
+  }
+
+  function applyName(raw, { persist = false, silent = false } = {}) {
+    const result = window.SnakeSettings.validatePlayerName(raw);
+    nameInput.classList.toggle("invalid", !result.ok);
+    if (!result.ok) {
+      nameHint.textContent = result.message;
+      nameHint.classList.add("error");
+      if (!silent) {
+        announce(result.message);
+      }
+      return false;
+    }
+
+    nameInput.value = result.name;
+    nameHint.textContent = result.name
+      ? `${result.message} Settings sync to local JSON when you save.`
+      : "Playing as Guest. Settings sync to local JSON when you save.";
+    nameHint.classList.remove("error");
+    if (persist) {
+      persistSettings({ playerName: result.name });
+    }
+    if (!silent) {
+      announce(result.message);
+    }
+    return true;
   }
 
   function updateMuteUi() {
@@ -250,9 +371,9 @@
 
       if (score > best) {
         best = score;
-        localStorage.setItem(bestKey, best);
         bestEl.textContent = best;
         bestEl.classList.add("best-flash");
+        persistSettings({ best });
         if (!beatBestThisRun) {
           beatBestThisRun = true;
           beep(880, 0.08, "sine", 0.04);

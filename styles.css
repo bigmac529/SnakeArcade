@@ -343,3 +343,84 @@ canvas:focus-visible {
     transition: none !important;
   }
 }
+
+
+.player-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.player-name {
+  display: grid;
+  gap: 6px;
+}
+
+.player-name span {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.player-name input {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  min-height: 44px;
+  padding: 0 12px;
+  width: min(100%, 320px);
+}
+
+.player-name input:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.player-name input.invalid {
+  border-color: var(--danger);
+}
+
+.name-hint {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.name-hint.error {
+  color: var(--danger);
+}
+
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.file-btn {
+  align-items: center;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  font-weight: 700;
+  min-height: 44px;
+  padding: 0 16px;
+}
+
+.file-btn:hover,
+.file-btn:focus-within {
+  border-color: var(--accent);
+}
+
+.player-chip {
+  color: var(--accent);
+  font-size: 0.95rem;
+  font-weight: 800;
+}

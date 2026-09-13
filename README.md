@@ -24,3 +24,9 @@ Visit `http://localhost:8080`.
 - `index.html` — page shell
 - `styles.css` — layout and theme
 - `game.js` — game loop and input
+
+## Player settings
+
+Enter a PG player name in the UI. Preferences (name, mute, pace, best score) persist in the browser and can be downloaded/loaded as `snake-settings.json`.
+
+Names are filtered client-side for a professional portfolio. Shared public leaderboards will need a backend later — this release keeps settings local per visitor.

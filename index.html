@@ -32,6 +32,22 @@
         </div>
       </div>
 
+      <div class="player-panel">
+        <label class="player-name" for="player-name">
+          <span>Player name</span>
+          <input id="player-name" type="text" maxlength="24" autocomplete="nickname" placeholder="Your name (PG)" spellcheck="false">
+        </label>
+        <p class="name-hint" id="name-hint">Names stay PG for this portfolio site. Settings save to a local JSON file.</p>
+        <div class="settings-actions">
+          <button id="save-settings" type="button">Save settings</button>
+          <button id="export-settings" type="button">Download JSON</button>
+          <label class="file-btn">
+            Load JSON
+            <input id="import-settings" type="file" accept="application/json,.json" hidden>
+          </label>
+        </div>
+      </div>
+
       <div class="toolbar">
         <div class="controls">
           <button id="start" type="button">Start</button>
@@ -74,6 +90,7 @@
     </section>
   </main>
 
+  <script src="settings.js"></script>
   <script src="game.js"></script>
 </body>
 </html>
