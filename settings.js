@@ -34,7 +34,10 @@
 
   function loadSettings() {
     try {
-      const raw = localStorage.getItem(SETTINGS_KEY);
+      let raw = localStorage.getItem(SETTINGS_KEY);
+      if (!raw) {
+        raw = localStorage.getItem(LEGACY_SETTINGS_KEY);
+      }
       if (raw) {
         return { ...defaultSettings(), ...JSON.parse(raw) };
       }
