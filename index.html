@@ -11,7 +11,7 @@
   <main class="shell" aria-label="Classic Snake game">
     <section class="game-panel">
       <div class="top-bar">
-        <div>
+        <div class="title-block">
           <p class="eyebrow">HTML5 Canvas</p>
           <h1>Classic Snake</h1>
         </div>
@@ -19,7 +19,7 @@
         <div class="scoreboard" aria-label="Scoreboard">
           <div>
             <span>Score</span>
-            <strong id="score" aria-live="polite">0</strong>
+            <strong id="score">0</strong>
           </div>
           <div>
             <span>Best</span>
@@ -32,19 +32,35 @@
         </div>
       </div>
 
+      <div class="toolbar">
+        <div class="controls">
+          <button id="start" type="button">Start</button>
+          <button id="pause" type="button">Pause</button>
+          <button id="restart" type="button">Restart</button>
+          <button id="mute" type="button" aria-pressed="false" title="Toggle sound">Sound: On</button>
+        </div>
+        <label class="difficulty">
+          <span>Pace</span>
+          <select id="difficulty" aria-label="Starting pace">
+            <option value="easy">Easy</option>
+            <option value="normal" selected>Normal</option>
+            <option value="fast">Fast</option>
+          </select>
+        </label>
+      </div>
+
+      <p class="help" id="help">
+        Move: arrows / WASD / swipe / pad · Pause: <kbd>P</kbd> · Sound: <kbd>M</kbd> · Start: Enter
+      </p>
+      <div id="status" class="sr-only" aria-live="polite"></div>
+
       <div class="canvas-wrap">
         <canvas id="game" width="640" height="640" tabindex="0" aria-label="Snake play field"></canvas>
         <div id="overlay" class="overlay">
           <h2>Press Start</h2>
           <p>Use arrow keys, WASD, swipe, or the pad.</p>
+          <button id="overlay-start" type="button">Start game</button>
         </div>
-      </div>
-
-      <div class="controls">
-        <button id="start" type="button">Start</button>
-        <button id="pause" type="button">Pause</button>
-        <button id="restart" type="button">Restart</button>
-        <button id="mute" type="button" aria-pressed="false" title="Toggle sound">Sound: On</button>
       </div>
 
       <div class="dpad" aria-label="Direction pad">

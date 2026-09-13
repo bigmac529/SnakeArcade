@@ -9,6 +9,9 @@
   const pauseBtn = document.querySelector("#pause");
   const restartBtn = document.querySelector("#restart");
   const muteBtn = document.querySelector("#mute");
+  const overlayStartBtn = document.querySelector("#overlay-start");
+  const difficultyEl = document.querySelector("#difficulty");
+  const statusEl = document.querySelector("#status");
 
   const cells = 24;
   const tile = canvas.width / cells;
@@ -19,8 +22,9 @@
     { x: 10, y: 12 },
     { x: 9, y: 12 }
   ];
-  const baseDelay = 125;
+  const paceDelays = { easy: 160, normal: 125, fast: 95 };
   const minDelay = 68;
+  let baseDelay = paceDelays[difficultyEl.value] || 125;
 
   let snake;
   let food;
@@ -56,6 +60,17 @@
     canvas.focus({ preventScroll: true });
   });
   muteBtn.addEventListener("click", toggleMute);
+  overlayStartBtn.addEventListener("click", () => {
+    start();
+    canvas.focus({ preventScroll: true });
+  });
+  difficultyEl.addEventListener("change", () => {
+    if (!running) {
+      applyPace();
+      speedEl.textContent = "1";
+      announce(`Pace set to ${difficultyEl.value}.`);
+    }
+  });
 
   document.querySelectorAll(".dpad [data-dir]").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -126,6 +141,18 @@
     touchStart = null;
   }, { passive: true });
 
+  function applyPace() {
+    baseDelay = paceDelays[difficultyEl.value] || 125;
+    if (!running) {
+      moveDelay = baseDelay;
+    }
+  }
+
+  function announce(message) {
+    statusEl.textContent = "";
+    statusEl.textContent = message;
+  }
+
   function start() {
     ensureAudio();
 
@@ -137,6 +164,7 @@
     paused = false;
     pauseBtn.textContent = "Pause";
     setOverlay(null);
+    announce("Game started.");
     beep(520, 0.05, "triangle", 0.03);
   }
 
@@ -148,6 +176,7 @@
     paused = !paused;
     pauseBtn.textContent = paused ? "Resume" : "Pause";
     setOverlay(paused ? "Paused" : null, paused ? "Press P, Resume, or keep playing." : "");
+    announce(paused ? "Paused." : "Resumed.");
   }
 
   function toggleMute() {
@@ -170,6 +199,7 @@
     direction = { x: 1, y: 0 };
     queuedDirection = direction;
     score = 0;
+    applyPace();
     moveDelay = baseDelay;
     running = false;
     paused = false;
@@ -246,6 +276,7 @@
     const detail = beatBestThisRun
       ? `New best: ${best}`
       : "Press Restart or Enter to play again.";
+    announce(beatBestThisRun ? `Game over. New best ${best}.` : `Game over. Score ${score}.`);
     setOverlay("Game Over", detail);
     if (beatBestThisRun) {
       overlay.querySelector("p").classList.add("new-best");
@@ -278,7 +309,7 @@
   }
 
   function drawGrid() {
-    ctx.strokeStyle = "rgba(255,255,255,0.045)";
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
     ctx.lineWidth = 1;
 
     for (let i = 1; i < cells; i += 1) {

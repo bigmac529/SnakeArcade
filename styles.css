@@ -29,7 +29,8 @@ body {
   font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
-button {
+button,
+select {
   border: 1px solid var(--line);
   background: var(--panel-2);
   color: var(--text);
@@ -37,13 +38,15 @@ button {
   font: inherit;
   font-weight: 700;
   min-height: 44px;
-  padding: 0 18px;
+  padding: 0 16px;
   border-radius: 6px;
   touch-action: manipulation;
 }
 
 button:hover,
-button:focus-visible {
+button:focus-visible,
+select:hover,
+select:focus-visible {
   border-color: var(--accent);
   outline: none;
 }
@@ -52,27 +55,32 @@ button:focus-visible {
   min-height: 100%;
   display: grid;
   place-items: center;
-  padding: 24px;
+  padding: 16px;
 }
 
 .game-panel {
-  width: min(100%, 760px);
+  width: min(100%, 720px);
+  display: grid;
+  gap: 12px;
 }
 
 .top-bar {
   align-items: end;
   display: flex;
-  gap: 18px;
+  gap: 12px;
   justify-content: space-between;
-  margin-bottom: 18px;
+}
+
+.title-block h1 {
+  font-size: clamp(1.6rem, 4vw, 2.2rem);
+  line-height: 1;
 }
 
 .eyebrow {
   color: var(--accent);
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   font-weight: 800;
-  letter-spacing: 0;
-  margin: 0 0 6px;
+  margin: 0 0 4px;
   text-transform: uppercase;
 }
 
@@ -82,15 +90,10 @@ p {
   margin: 0;
 }
 
-h1 {
-  font-size: clamp(2rem, 2.8rem, 3rem);
-  line-height: 1;
-}
-
 .scoreboard {
   display: grid;
-  gap: 10px;
-  grid-template-columns: repeat(3, minmax(80px, 1fr));
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(70px, 1fr));
 }
 
 .developer-link {
@@ -101,11 +104,11 @@ h1 {
   border-radius: 999px;
   color: var(--accent);
   display: inline-flex;
-  font-size: 0.95rem;
+  font-size: 0.9rem;
   font-weight: 800;
   justify-content: center;
-  min-height: 42px;
-  padding: 0 16px;
+  min-height: 40px;
+  padding: 0 14px;
   text-decoration: none;
   white-space: nowrap;
 }
@@ -121,26 +124,73 @@ h1 {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
-  min-width: 84px;
-  padding: 10px 14px;
+  padding: 8px 12px;
   text-align: right;
 }
 
 .scoreboard span {
   color: var(--muted);
   display: block;
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   font-weight: 700;
   text-transform: uppercase;
 }
 
 .scoreboard strong {
   display: block;
-  font-size: 1.55rem;
+  font-size: 1.35rem;
 }
 
 .scoreboard strong.best-flash {
   color: var(--accent-2);
+}
+
+.toolbar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.controls {
+  display: grid;
+  flex: 1;
+  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  min-width: min(100%, 420px);
+}
+
+.difficulty {
+  align-items: center;
+  color: var(--muted);
+  display: inline-flex;
+  font-size: 0.85rem;
+  font-weight: 700;
+  gap: 8px;
+  text-transform: uppercase;
+}
+
+.difficulty select {
+  text-transform: none;
+}
+
+.help {
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.help kbd {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--text);
+  display: inline-block;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 1px 6px;
 }
 
 .canvas-wrap {
@@ -148,10 +198,12 @@ h1 {
   background: #0c1013;
   border: 1px solid var(--line);
   border-radius: 8px;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+  margin: 0 auto;
+  max-height: min(56dvh, 560px);
   overflow: hidden;
   position: relative;
-  width: 100%;
+  width: min(100%, 560px);
 }
 
 canvas {
@@ -167,10 +219,10 @@ canvas:focus-visible {
 
 .overlay {
   align-items: center;
-  background: rgba(12, 16, 19, 0.76);
+  background: rgba(12, 16, 19, 0.78);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   inset: 0;
   justify-content: center;
   padding: 20px;
@@ -184,11 +236,12 @@ canvas:focus-visible {
 }
 
 .overlay h2 {
-  font-size: 2rem;
+  font-size: clamp(1.5rem, 4vw, 2rem);
 }
 
 .overlay p {
   color: var(--muted);
+  max-width: 28ch;
 }
 
 .overlay .new-best {
@@ -196,11 +249,10 @@ canvas:focus-visible {
   font-weight: 800;
 }
 
-.controls {
-  display: grid;
-  gap: 10px;
-  grid-template-columns: repeat(4, 1fr);
-  margin-top: 16px;
+.overlay button {
+  background: var(--accent);
+  color: #102015;
+  pointer-events: auto;
 }
 
 #start {
@@ -220,7 +272,6 @@ canvas:focus-visible {
   display: none;
   gap: 8px;
   justify-items: center;
-  margin-top: 16px;
 }
 
 .dpad > button,
@@ -237,11 +288,18 @@ canvas:focus-visible {
   grid-template-columns: 1fr 1fr;
 }
 
-@media (max-width: 720px) {
-  .controls {
-    grid-template-columns: repeat(2, 1fr);
-  }
+.sr-only {
+  border: 0;
+  clip: rect(0 0 0 0);
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  width: 1px;
+}
 
+@media (max-width: 820px) {
   .dpad {
     display: grid;
   }
@@ -249,7 +307,7 @@ canvas:focus-visible {
 
 @media (max-width: 620px) {
   .shell {
-    padding: 14px;
+    padding: 12px;
   }
 
   .top-bar {
@@ -267,6 +325,15 @@ canvas:focus-visible {
 
   .scoreboard div {
     text-align: left;
+  }
+
+  .controls {
+    grid-template-columns: repeat(2, 1fr);
+    min-width: 100%;
+  }
+
+  .canvas-wrap {
+    max-height: min(48dvh, 420px);
   }
 }
 
