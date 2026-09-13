@@ -17,6 +17,20 @@
     };
   }
 
+  function writeLocalCache(settings) {
+    const next = {
+      ...defaultSettings(),
+      ...settings
+    };
+    if (!next.updatedAt) {
+      next.updatedAt = new Date().toISOString();
+    }
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
+    localStorage.setItem(LEGACY_BEST, String(next.best || 0));
+    localStorage.setItem(LEGACY_MUTE, next.muted ? "1" : "0");
+    return next;
+  }
+
   function loadSettings() {
     try {
       const raw = localStorage.getItem(SETTINGS_KEY);
@@ -38,15 +52,37 @@
     return settings;
   }
 
+  function isLocalEmpty(settings) {
+    if (!settings) {
+      return true;
+    }
+    const hasName = Boolean(settings.playerName);
+    const hasBest = Number(settings.best || 0) > 0;
+    const hasMute = Boolean(settings.muted);
+    const hasCustomDifficulty = settings.difficulty && settings.difficulty !== "normal";
+    return !hasName && !hasBest && !hasMute && !hasCustomDifficulty;
+  }
+
   function saveSettings(settings) {
-    const next = {
+    const next = writeLocalCache({
       ...defaultSettings(),
       ...settings,
       updatedAt: new Date().toISOString()
-    };
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
-    localStorage.setItem(LEGACY_BEST, String(next.best || 0));
-    localStorage.setItem(LEGACY_MUTE, next.muted ? "1" : "0");
+    });
+
+    // Fire-and-forget server persist; never block gameplay/UI.
+    try {
+      fetch("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(next)
+      }).catch(() => {
+        /* ignore network errors */
+      });
+    } catch (_) {
+      /* ignore */
+    }
+
     return next;
   }
 
@@ -108,6 +144,40 @@
     return handle;
   }
 
+  async function hydrateFromServer(playerName) {
+    try {
+      const query = encodeURIComponent(playerName || "");
+      const response = await fetch(`/api/settings?player=${query}`);
+      if (!response.ok) {
+        return loadSettings();
+      }
+      const serverSettings = await response.json();
+      if (!serverSettings || serverSettings._missing || !serverSettings.updatedAt) {
+        return loadSettings();
+      }
+
+      const local = loadSettings();
+      const localEmpty = isLocalEmpty(local);
+      const serverTime = Date.parse(serverSettings.updatedAt);
+      const localTime = Date.parse(local.updatedAt || 0);
+      const serverNewer =
+        Number.isFinite(serverTime) && (!Number.isFinite(localTime) || serverTime > localTime);
+
+      if (serverNewer || localEmpty) {
+        const merged = {
+          ...local,
+          ...serverSettings
+        };
+        delete merged._missing;
+        return writeLocalCache(merged);
+      }
+
+      return local;
+    } catch (_) {
+      return loadSettings();
+    }
+  }
+
   window.SnakeSettings = {
     SETTINGS_KEY,
     loadSettings,
@@ -115,6 +185,7 @@
     validatePlayerName,
     downloadSettings,
     maybeWriteLocalFile,
-    defaultSettings
+    defaultSettings,
+    hydrateFromServer
   };
 })();

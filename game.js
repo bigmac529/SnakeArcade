@@ -51,6 +51,18 @@
   let beatBestThisRun = false;
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+  function applySettingsToUi(next) {
+    settings = next;
+    best = Number(next.best || 0);
+    muted = Boolean(next.muted);
+    bestEl.textContent = best;
+    difficultyEl.value = next.difficulty in paceDelays ? next.difficulty : "normal";
+    nameInput.value = next.playerName || "";
+    updateMuteUi();
+    applyPace();
+    applyName(next.playerName || "", { silent: true, persist: false });
+  }
+
   bestEl.textContent = best;
   difficultyEl.value = settings.difficulty in paceDelays ? settings.difficulty : "normal";
   nameInput.value = settings.playerName || "";
@@ -58,6 +70,13 @@
   applyName(settings.playerName || "", { silent: true, persist: false });
   reset();
   requestAnimationFrame(loop);
+
+  window.SnakeSettings.hydrateFromServer(nameInput.value).then((hydrated) => {
+    if (!hydrated) {
+      return;
+    }
+    applySettingsToUi(hydrated);
+  });
 
   startBtn.addEventListener("click", () => {
     start();
@@ -98,6 +117,11 @@
       return;
     }
     const saved = persistSettings({});
+    nameHint.textContent = "Settings saved to server and this browser.";
+    nameHint.classList.remove("error");
+    announce("Settings saved to server and this browser.");
+
+    // Optional file-picker / download remains available as a backup export.
     if (window.showSaveFilePicker) {
       try {
         settingsFileHandle = settingsFileHandle || await window.showSaveFilePicker({
@@ -105,9 +129,8 @@
           types: [{ description: "JSON", accept: { "application/json": [".json"] } }]
         });
         await window.SnakeSettings.maybeWriteLocalFile(saved, settingsFileHandle);
-        nameHint.textContent = "Settings saved to your local JSON file.";
-        nameHint.classList.remove("error");
-        announce("Settings saved to local JSON file.");
+        nameHint.textContent = "Settings saved to server and this browser (backup JSON file updated).";
+        announce("Settings saved to server; backup JSON file updated.");
         return;
       } catch (error) {
         if (error && error.name === "AbortError") {
@@ -115,10 +138,6 @@
         }
       }
     }
-    window.SnakeSettings.downloadSettings(saved);
-    nameHint.textContent = "Settings saved in this browser and downloaded as snake-settings.json.";
-    nameHint.classList.remove("error");
-    announce("Settings downloaded as snake-settings.json.");
   });
   exportSettingsBtn.addEventListener("click", () => {
     applyName(nameInput.value, { persist: true });
@@ -298,8 +317,8 @@
 
     nameInput.value = result.name;
     nameHint.textContent = result.name
-      ? `${result.message} Settings sync to local JSON when you save.`
-      : "Playing as Guest. Settings sync to local JSON when you save.";
+      ? `${result.message} Settings sync to the server disk JSON when you save.`
+      : "Playing as Guest. Settings sync to the server disk JSON when you save.";
     nameHint.classList.remove("error");
     if (persist) {
       persistSettings({ playerName: result.name });

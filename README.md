@@ -1,14 +1,19 @@
 # Classic Snake
 
-Static HTML5 Canvas Snake game recovered from [snakegame.socha3.com](https://snakegame.socha3.com).
+HTML5 Canvas Snake game recovered from [snakegame.socha3.com](https://snakegame.socha3.com), with a small Node.js Express backend for per-player settings.
 
 ## Run locally
 
 ```bash
-python3 -m http.server 8080
+npm install
+npm start
 ```
 
-Visit `http://localhost:8080`.
+Visit [http://localhost:3000](http://localhost:3000).
+
+Optional: `PORT=8080 npm start`
+
+Dev script is the same entrypoint: `npm run dev`.
 
 ## Controls
 
@@ -24,9 +29,32 @@ Visit `http://localhost:8080`.
 - `index.html` — page shell
 - `styles.css` — layout and theme
 - `game.js` — game loop and input
+- `settings.js` — localStorage + server settings helpers
+- `server.js` — Express static host + `/api/settings`
+- `data/settings.json` — per-player settings map (created at runtime; gitignored)
 
 ## Player settings
 
-Enter a PG player name in the UI. Preferences (name, mute, pace, best score) persist in the browser and can be downloaded/loaded as `snake-settings.json`.
+Enter a PG player name in the UI. Preferences (name, mute, pace, best score) persist in the browser **and** on the server in `data/settings.json`.
 
-Names are filtered client-side for a professional portfolio. Shared public leaderboards will need a backend later — this release keeps settings local per visitor.
+That file looks like:
+
+```json
+{
+  "players": {
+    "ada": {
+      "version": 1,
+      "playerName": "Ada",
+      "muted": false,
+      "difficulty": "normal",
+      "best": 120,
+      "updatedAt": "2026-09-13T12:00:00.000Z"
+    },
+    "_guest": { "...": "..." }
+  }
+}
+```
+
+Keys are normalized player names (lowercase / trimmed), or `_guest` when empty. Saving in the UI writes localStorage and `PUT /api/settings`. On load, the client hydrates from `GET /api/settings?player=...` when the server copy is newer (or local is empty). Download/Load JSON remains available as a backup export/import.
+
+Names are filtered client-side for a professional portfolio.
