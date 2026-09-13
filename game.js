@@ -12,6 +12,9 @@
   const overlayStartBtn = document.querySelector("#overlay-start");
   const difficultyEl = document.querySelector("#difficulty");
   const statusEl = document.querySelector("#status");
+  const boardEl = document.querySelector("#arcade-board");
+  const boardListEl = document.querySelector("#arcade-board-list");
+  const boardMetaEl = document.querySelector("#arcade-board-meta");
 
   const cells = 24;
   const tile = canvas.width / cells;
@@ -25,13 +28,13 @@
 
   const nameInput = document.querySelector("#player-name");
   const nameHint = document.querySelector("#name-hint");
-  const saveSettingsBtn = document.querySelector("#save-settings");
-  const exportSettingsBtn = document.querySelector("#export-settings");
-  const importSettingsInput = document.querySelector("#import-settings");
+  const saveNameBtn = document.querySelector("#save-settings");
 
   let settings = window.SnakeSettings.loadSettings();
-  let settingsFileHandle = null;
   let baseDelay = paceDelays[settings.difficulty] || paceDelays[difficultyEl.value] || 125;
+  let nameSavedThisSession = false;
+  let savedNameSnapshot = "";
+  let saveInFlight = false;
 
   let snake;
   let food;
@@ -61,6 +64,7 @@
     updateMuteUi();
     applyPace();
     applyName(next.playerName || "", { silent: true, persist: false });
+    updateStartGateUi();
   }
 
   bestEl.textContent = best;
@@ -68,28 +72,41 @@
   nameInput.value = settings.playerName || "";
   updateMuteUi();
   applyName(settings.playerName || "", { silent: true, persist: false });
+  updateStartGateUi();
   reset();
   requestAnimationFrame(loop);
+  refreshArcadeBoard();
 
   window.SnakeSettings.hydrateFromServer(nameInput.value).then((hydrated) => {
     if (!hydrated) {
       return;
     }
     applySettingsToUi(hydrated);
+    refreshArcadeBoard();
   });
 
   startBtn.addEventListener("click", () => {
+    if (!ensureCanStart()) {
+      return;
+    }
     start();
     canvas.focus({ preventScroll: true });
   });
   pauseBtn.addEventListener("click", togglePause);
   restartBtn.addEventListener("click", () => {
+    // Restart always begins a fresh run — require a saved name.
+    if (!ensureCanStart()) {
+      return;
+    }
     reset();
     start();
     canvas.focus({ preventScroll: true });
   });
   muteBtn.addEventListener("click", toggleMute);
   overlayStartBtn.addEventListener("click", () => {
+    if (!ensureCanStart()) {
+      return;
+    }
     start();
     canvas.focus({ preventScroll: true });
   });
@@ -97,90 +114,117 @@
     if (!running) {
       applyPace();
       speedEl.textContent = "1";
-      persistSettings({ difficulty: difficultyEl.value });
+      persistSettingsLocal({ difficulty: difficultyEl.value });
+      if (nameSavedThisSession) {
+        pushServerState({ force: true, quiet: true });
+      }
       announce(`Pace set to ${difficultyEl.value}.`);
     }
   });
 
+  nameInput.addEventListener("input", () => {
+    // Changing the name clears the session "saved" gate.
+    if (nameSavedThisSession) {
+      nameSavedThisSession = false;
+      savedNameSnapshot = "";
+      updateStartGateUi();
+      nameHint.textContent = "Name changed — save it before you can start.";
+      nameHint.classList.remove("error");
+    }
+  });
   nameInput.addEventListener("change", () => {
-    applyName(nameInput.value, { persist: true });
+    applyName(nameInput.value, { persist: false });
   });
   nameInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       event.preventDefault();
-      applyName(nameInput.value, { persist: true });
-      nameInput.blur();
+      saveNameBtn.click();
     }
   });
-  saveSettingsBtn.addEventListener("click", async () => {
-    if (!applyName(nameInput.value, { persist: true })) {
+
+  saveNameBtn.addEventListener("click", async () => {
+    if (saveInFlight) {
       return;
     }
-    const saved = persistSettings({});
-    nameHint.textContent = "Settings saved to server and this browser.";
-    nameHint.classList.remove("error");
-    announce("Settings saved to server and this browser.");
+    if (!applyName(nameInput.value, { persist: false })) {
+      updateStartGateUi();
+      return;
+    }
 
-    // Optional file-picker / download remains available as a backup export.
-    if (window.showSaveFilePicker) {
-      try {
-        settingsFileHandle = settingsFileHandle || await window.showSaveFilePicker({
-          suggestedName: "snake-arcade-settings.json",
-          types: [{ description: "JSON", accept: { "application/json": [".json"] } }]
-        });
-        await window.SnakeSettings.maybeWriteLocalFile(saved, settingsFileHandle);
-        nameHint.textContent = "Settings saved to server and this browser (backup JSON file updated).";
-        announce("Settings saved to server; backup JSON file updated.");
-        return;
-      } catch (error) {
-        if (error && error.name === "AbortError") {
+    saveInFlight = true;
+    saveNameBtn.disabled = true;
+    nameHint.textContent = "Saving name to arcade board…";
+    nameHint.classList.remove("error");
+
+    try {
+      const draft = {
+        ...settings,
+        playerName: nameInput.value.trim(),
+        muted,
+        difficulty: difficultyEl.value,
+        best
+      };
+
+      let result = await window.SnakeSettings.saveToServer(draft, {
+        force: false,
+        baseRevision: window.SnakeSettings.getKnownRevision()
+      });
+
+      if (!result.ok && result.error === "name_exists") {
+        const existingBest = result.existing ? Number(result.existing.best || 0) : 0;
+        const existingLabel =
+          (result.existing && result.existing.playerName) || draft.playerName;
+        const ok = window.confirm(
+          `"${existingLabel}" is already on the arcade board (best score: ${existingBest}).\n\nClaim / overwrite this name?`
+        );
+        if (!ok) {
+          nameHint.textContent = "Save cancelled — that name is already taken.";
+          nameHint.classList.add("error");
+          announce("Save cancelled.");
           return;
         }
+        result = await window.SnakeSettings.saveToServer(draft, {
+          force: true,
+          baseRevision: result.revision != null
+            ? result.revision
+            : window.SnakeSettings.getKnownRevision()
+        });
       }
-    }
-  });
-  exportSettingsBtn.addEventListener("click", () => {
-    if (!applyName(nameInput.value, { persist: true })) {
-      return;
-    }
-    window.SnakeSettings.downloadSettings(persistSettings({}));
-    announce("Downloaded snake-arcade-settings.json.");
-  });
-  importSettingsInput.addEventListener("change", async () => {
-    const file = importSettingsInput.files && importSettingsInput.files[0];
-    if (!file) {
-      return;
-    }
-    try {
-      const parsed = JSON.parse(await file.text());
-      const incoming = {
-        ...window.SnakeSettings.loadSettings(),
-        ...parsed
-      };
-      const nameCheck = window.SnakeSettings.validatePlayerName(incoming.playerName || "");
-      if (!nameCheck.ok) {
-        incoming.playerName = "";
-      } else {
-        incoming.playerName = nameCheck.name;
+
+      if (!result.ok) {
+        if (result.error === "revision_conflict") {
+          nameHint.textContent =
+            "Arcade board changed while saving. Refreshing board — try Save name again.";
+          await refreshArcadeBoard();
+        } else if (result.error === "lock_busy") {
+          nameHint.textContent =
+            "Arcade board is busy (another save in progress). Please try again.";
+        } else {
+          nameHint.textContent = result.message || "Could not save name.";
+        }
+        nameHint.classList.add("error");
+        announce(result.message || "Could not save name.");
+        return;
       }
-      const next = window.SnakeSettings.saveSettings(incoming);
-      settings = next;
-      best = Number(next.best || 0);
-      muted = Boolean(next.muted);
+
+      settings = result.settings;
+      best = Number(settings.best || 0);
       bestEl.textContent = best;
-      difficultyEl.value = next.difficulty in paceDelays ? next.difficulty : "normal";
-      nameInput.value = next.playerName || "";
-      updateMuteUi();
-      applyPace();
-      applyName(next.playerName || "", { persist: false });
-      nameHint.textContent = "Loaded settings from JSON.";
+      nameSavedThisSession = true;
+      savedNameSnapshot = settings.playerName;
+      nameHint.textContent = `Saved as ${settings.playerName}. You’re cleared to Start.`;
       nameHint.classList.remove("error");
-      announce("Settings loaded from JSON.");
+      announce(`Name saved: ${settings.playerName}.`);
+      updateStartGateUi();
+      await refreshArcadeBoard();
     } catch (_) {
-      nameHint.textContent = "Could not read that JSON file.";
+      nameHint.textContent = "Network error while saving name.";
       nameHint.classList.add("error");
+      announce("Network error while saving name.");
+    } finally {
+      saveInFlight = false;
+      updateStartGateUi();
     }
-    importSettingsInput.value = "";
   });
 
   document.querySelectorAll(".dpad [data-dir]").forEach((btn) => {
@@ -288,7 +332,67 @@
     statusEl.textContent = message;
   }
 
+  function canStart() {
+    if (!nameSavedThisSession) {
+      return false;
+    }
+    const check = window.SnakeSettings.validatePlayerName(nameInput.value);
+    if (!check.ok || check.name.length < 2) {
+      return false;
+    }
+    if (savedNameSnapshot && check.name !== savedNameSnapshot) {
+      return false;
+    }
+    return true;
+  }
+
+  function ensureCanStart() {
+    if (canStart()) {
+      return true;
+    }
+    const check = window.SnakeSettings.validatePlayerName(nameInput.value);
+    const msg = !check.ok
+      ? check.message
+      : "Save your name before starting.";
+    nameHint.textContent = msg;
+    nameHint.classList.add("error");
+    announce(msg);
+    updateStartGateUi();
+    nameInput.focus({ preventScroll: true });
+    return false;
+  }
+
+  function updateStartGateUi() {
+    const ok = canStart();
+    startBtn.disabled = !ok || saveInFlight;
+    overlayStartBtn.disabled = !ok || saveInFlight;
+    restartBtn.disabled = !ok || saveInFlight;
+    saveNameBtn.disabled = saveInFlight;
+    startBtn.title = ok ? "Start game" : "Save a PG name first";
+    overlayStartBtn.title = startBtn.title;
+    restartBtn.title = ok ? "Restart" : "Save a PG name first";
+    if (overlay && !overlay.classList.contains("hidden")) {
+      const title = overlay.querySelector("h2");
+      if (title && (title.textContent === "Press Start" || title.textContent === "Save a name")) {
+        if (!ok) {
+          setOverlay(
+            "Save a name",
+            "Pick a PG name (2+ characters), tap Save name, then Start."
+          );
+        } else if (!running && !gameOver) {
+          setOverlay(
+            "Press Start",
+            "Tap Start to play. Then use arrow keys, WASD, swipe, or the pad."
+          );
+        }
+      }
+    }
+  }
+
   function start() {
+    if (!ensureCanStart()) {
+      return;
+    }
     ensureAudio();
 
     if (gameOver) {
@@ -316,18 +420,23 @@
 
   function toggleMute() {
     muted = !muted;
-    persistSettings({ muted });
+    persistSettingsLocal({ muted });
     updateMuteUi();
+    if (nameSavedThisSession) {
+      pushServerState({ force: true, quiet: true });
+    }
     if (!muted) {
       ensureAudio();
       beep(440, 0.04, "sine", 0.03);
     }
   }
 
-  function persistSettings(patch = {}) {
+  function persistSettingsLocal(patch = {}) {
     const merged = {
       ...settings,
-      playerName: nameInput.value.trim(),
+      playerName: nameSavedThisSession
+        ? savedNameSnapshot || nameInput.value.trim()
+        : (settings.playerName || ""),
       muted,
       difficulty: difficultyEl.value,
       best,
@@ -336,8 +445,49 @@
     const nameCheck = window.SnakeSettings.validatePlayerName(merged.playerName);
     // Never persist a rejected name from the input box via mute/pace/score saves.
     merged.playerName = nameCheck.ok ? nameCheck.name : (settings.playerName || "");
-    settings = window.SnakeSettings.saveSettings(merged);
+    settings = window.SnakeSettings.cacheSettings(merged);
     return settings;
+  }
+
+  async function pushServerState({ force = true, quiet = false } = {}) {
+    if (!nameSavedThisSession || !savedNameSnapshot) {
+      return;
+    }
+    const draft = {
+      ...settings,
+      playerName: savedNameSnapshot,
+      muted,
+      difficulty: difficultyEl.value,
+      best
+    };
+    try {
+      const result = await window.SnakeSettings.saveToServer(draft, {
+        force,
+        baseRevision: window.SnakeSettings.getKnownRevision()
+      });
+      if (result.ok) {
+        settings = result.settings;
+        if (result.revision != null) {
+          await refreshArcadeBoard();
+        }
+      } else if (!quiet) {
+        announce(result.message || "Could not sync score.");
+      } else if (result.error === "revision_conflict" || result.error === "lock_busy") {
+        // Soft retry once for background score sync.
+        const retry = await window.SnakeSettings.saveToServer(draft, {
+          force: true,
+          baseRevision: result.revision != null
+            ? result.revision
+            : window.SnakeSettings.getKnownRevision()
+        });
+        if (retry.ok) {
+          settings = retry.settings;
+          await refreshArcadeBoard();
+        }
+      }
+    } catch (_) {
+      /* ignore background sync errors */
+    }
   }
 
   function applyName(raw, { persist = false, silent = false } = {}) {
@@ -349,26 +499,72 @@
       if (!silent) {
         announce(result.message);
       }
+      updateStartGateUi();
       return false;
     }
 
     nameInput.value = result.name;
-    nameHint.textContent = result.name
-      ? `${result.message} Settings sync to the server disk JSON when you save.`
-      : "Playing as Guest. Settings sync to the server disk JSON when you save.";
+    if (!nameSavedThisSession || result.name !== savedNameSnapshot) {
+      nameHint.textContent = `${result.message} Tap Save name to claim it on the arcade board.`;
+    } else {
+      nameHint.textContent = `${result.message} Saved this session — Start when ready.`;
+    }
     nameHint.classList.remove("error");
     if (persist) {
-      persistSettings({ playerName: result.name });
+      persistSettingsLocal({ playerName: result.name });
     }
     if (!silent) {
       announce(result.message);
     }
+    updateStartGateUi();
     return true;
   }
 
   function updateMuteUi() {
     muteBtn.textContent = muted ? "Sound: Off" : "Sound: On";
     muteBtn.setAttribute("aria-pressed", muted ? "true" : "false");
+  }
+
+  async function refreshArcadeBoard() {
+    if (!boardListEl) {
+      return;
+    }
+    const { revision, players } = await window.SnakeSettings.fetchPlayers();
+    boardListEl.innerHTML = "";
+    if (!players.length) {
+      const empty = document.createElement("li");
+      empty.className = "board-empty";
+      empty.textContent = "No high scores yet — be the first snake!";
+      boardListEl.appendChild(empty);
+    } else {
+      players.forEach((p, index) => {
+        const li = document.createElement("li");
+        li.className = "board-row";
+        if (savedNameSnapshot && p.playerName === savedNameSnapshot) {
+          li.classList.add("is-you");
+        }
+        const rank = document.createElement("span");
+        rank.className = "board-rank";
+        rank.textContent = index === 0 ? "👑" : `#${index + 1}`;
+        const name = document.createElement("span");
+        name.className = "board-name";
+        name.textContent = p.playerName;
+        const pts = document.createElement("span");
+        pts.className = "board-best";
+        pts.textContent = String(p.best);
+        li.appendChild(rank);
+        li.appendChild(name);
+        li.appendChild(pts);
+        boardListEl.appendChild(li);
+      });
+    }
+    if (boardMetaEl) {
+      boardMetaEl.textContent =
+        revision != null ? `rev ${revision} · ${players.length} player${players.length === 1 ? "" : "s"}` : "";
+    }
+    if (boardEl) {
+      boardEl.dataset.count = String(players.length);
+    }
   }
 
   function reset() {
@@ -388,7 +584,15 @@
     overlay.querySelector("p").classList.remove("new-best");
     pauseBtn.textContent = "Pause";
     food = placeFood();
-    setOverlay("Press Start", "Tap Start to play. Then use arrow keys, WASD, swipe, or the pad.");
+    if (canStart()) {
+      setOverlay("Press Start", "Tap Start to play. Then use arrow keys, WASD, swipe, or the pad.");
+    } else {
+      setOverlay(
+        "Save a name",
+        "Pick a PG name (2+ characters), tap Save name, then Start."
+      );
+    }
+    updateStartGateUi();
     draw();
   }
 
@@ -429,7 +633,8 @@
         best = score;
         bestEl.textContent = best;
         bestEl.classList.add("best-flash");
-        persistSettings({ best });
+        persistSettingsLocal({ best });
+        pushServerState({ force: true, quiet: true });
         if (!beatBestThisRun) {
           beatBestThisRun = true;
           beep(880, 0.08, "sine", 0.04);
@@ -457,6 +662,7 @@
     setOverlay("Game Over", detail);
     if (beatBestThisRun) {
       overlay.querySelector("p").classList.add("new-best");
+      refreshArcadeBoard();
     } else {
       overlay.querySelector("p").classList.remove("new-best");
     }

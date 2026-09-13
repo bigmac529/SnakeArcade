@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#101418">
   <title>SnakeArcade</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -13,7 +14,7 @@
       <div class="top-bar">
         <div class="title-block">
           <p class="eyebrow">HTML5 Canvas</p>
-          <h1>SnakeArcade</h1>
+          <h1>SnakeArcade <span class="title-snake" aria-hidden="true">🐍</span></h1>
         </div>
         <a class="developer-link" href="https://socha3.com">Meet the developer</a>
         <div class="scoreboard" aria-label="Scoreboard">
@@ -35,16 +36,11 @@
       <div class="player-panel">
         <label class="player-name" for="player-name">
           <span>Player name</span>
-          <input id="player-name" type="text" maxlength="24" autocomplete="nickname" placeholder="Your name (PG)" spellcheck="false">
+          <input id="player-name" type="text" maxlength="24" autocomplete="nickname" placeholder="Your name (PG, 2+ chars)" spellcheck="false">
         </label>
-        <p class="name-hint" id="name-hint">Names stay PG for this portfolio site. Settings save to server disk JSON via the Node backend.</p>
+        <p class="name-hint" id="name-hint">Pick a PG name, tap Save name, then Start. Guest / empty names can’t play.</p>
         <div class="settings-actions">
-          <button id="save-settings" type="button">Save settings</button>
-          <button id="export-settings" type="button">Download JSON</button>
-          <label class="file-btn">
-            Load JSON
-            <input id="import-settings" type="file" accept="application/json,.json" hidden>
-          </label>
+          <button id="save-settings" type="button">Save name</button>
         </div>
       </div>
 
@@ -66,17 +62,28 @@
       </div>
 
       <p class="help" id="help">
-        Move: arrows / WASD / swipe / pad · Pause: <kbd>P</kbd> / Space · Sound: <kbd>M</kbd> · Start: Start button only
+        Move: arrows / WASD / swipe / pad · Pause: <kbd>P</kbd> / Space · Sound: <kbd>M</kbd> · Start: after Save name
       </p>
       <div id="status" class="sr-only" aria-live="polite"></div>
 
-      <div class="canvas-wrap">
-        <canvas id="game" width="640" height="640" tabindex="0" aria-label="Snake play field"></canvas>
-        <div id="overlay" class="overlay">
-          <h2>Press Start</h2>
-          <p>Tap Start to play. Then use arrow keys, WASD, swipe, or the pad.</p>
-          <button id="overlay-start" type="button">Start game</button>
+      <div class="play-layout">
+        <div class="canvas-wrap">
+          <canvas id="game" width="640" height="640" tabindex="0" aria-label="Snake play field"></canvas>
+          <div id="overlay" class="overlay">
+            <h2>Save a name</h2>
+            <p>Pick a PG name (2+ characters), tap Save name, then Start.</p>
+            <button id="overlay-start" type="button">Start game</button>
+          </div>
         </div>
+
+        <aside id="arcade-board" class="arcade-board" aria-label="Arcade leaderboard">
+          <div class="board-header">
+            <h2><span aria-hidden="true">🐍</span> Arcade board</h2>
+            <p id="arcade-board-meta" class="board-meta"></p>
+          </div>
+          <ol id="arcade-board-list" class="board-list"></ol>
+          <p class="board-foot">Scores sync from the server JSON. Crown goes to the hungriest snake.</p>
+        </aside>
       </div>
 
       <div class="dpad" aria-label="Direction pad">
@@ -94,5 +101,3 @@
   <script src="game.js"></script>
 </body>
 </html>
-
-

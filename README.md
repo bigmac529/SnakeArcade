@@ -1,6 +1,6 @@
 # SnakeArcade
 
-HTML5 Canvas snake game with a small Node.js Express backend for per-player settings. Production Node host: [snakearcade.socha3.com](https://snakearcade.socha3.com) (older static copy may still live at [snakegame.socha3.com](https://snakegame.socha3.com)).
+HTML5 Canvas snake game with a small Node.js Express backend for per-player settings and an arcade leaderboard. Production Node host: [snakearcade.socha3.com](https://snakearcade.socha3.com) (older static copy may still live at [snakegame.socha3.com](https://snakegame.socha3.com)).
 
 ## Run locally
 
@@ -20,27 +20,46 @@ Dev script is the same entrypoint: `npm run dev`.
 - Arrow keys or WASD
 - Swipe on the canvas
 - On-screen D-pad (narrow screens)
-- Start / Pause–Resume / Restart
+- Start / Pause–Resume / Restart (Start requires a saved PG name this session)
 - Sound toggle (`M`)
 - `P` to pause
 
 ## Files
 
-- `index.html` - page shell
+- `index.html` - page shell + Arcade board panel
 - `styles.css` - layout and theme
-- `game.js` - game loop and input
+- `favicon.svg` - cute snake favicon
+- `game.js` - game loop, input, start-gate, leaderboard UI
 - `settings.js` - localStorage + server settings helpers
-- `server.js` - Express static host + `/api/settings` + `/api/health`
-- `data/settings.json` - per-player settings map (created at runtime; gitignored)
+- `server.js` - Express static host + settings/players API + `/api/health`
+- `data/settings.json` - revisioned per-player settings map (created at runtime; gitignored)
 
-## Player settings
+## Player settings & Arcade board
 
-Enter a PG player name in the UI. Preferences (name, mute, pace, best score) persist in the browser **and** on the server in `data/settings.json`.
+Enter a PG player name (2+ characters) and tap **Save name**. That writes name + mute/pace/best to `data/settings.json` via `PUT /api/settings`. Guest / empty names cannot start.
 
-That file looks like:
+If the name already exists on the server, the UI asks for confirmation (shows the existing best score) and only overwrites after you confirm (`force: true`).
+
+Changing the name input clears the session “saved” flag until you save again. Start / overlay Start / Restart stay disabled until a successful save this session.
+
+The **Arcade board** panel lists all players sorted by best score (desc). It refreshes on load, after save, and when a new best is synced.
+
+### API
+
+- `GET /api/health` → `{ ok, app, node, port, time }`
+- `GET /api/players` → `{ revision, players: [{ playerName, best, updatedAt, key }] }` sorted by best
+- `GET /api/settings?player=` → one player record (+ `revision`)
+- `PUT /api/settings` body: `{ playerName, muted, difficulty, best, force?, baseRevision? }`
+  - `400` `{ error: "playerName_rejected", message }` — PG / validation reject
+  - `409` `{ error: "name_exists", existing, revision }` — name taken and `force` not set
+  - `409` `{ error: "revision_conflict" | "lock_busy", revision }` — concurrency
+  - `200` saved player + `revision`
+
+Store shape:
 
 ```json
 {
+  "revision": 3,
   "players": {
     "ada": {
       "version": 1,
@@ -49,15 +68,14 @@ That file looks like:
       "difficulty": "normal",
       "best": 120,
       "updatedAt": "2026-09-13T12:00:00.000Z"
-    },
-    "_guest": { "...": "..." }
+    }
   }
 }
 ```
 
-Keys are normalized player names (lowercase / trimmed), or `_guest` when empty. Saving in the UI writes localStorage and `PUT /api/settings`. On load, the client hydrates from `GET /api/settings?player=...` when the server copy is newer (or local is empty). Download/Load JSON remains available as a backup export/import.
+Writes use a `.lock` file (`wx` + retries/backoff/jitter) and bump `revision` each successful write. The HTTP server binds `127.0.0.1` only.
 
-Names are filtered client-side for a professional portfolio.
+Names are filtered client- and server-side (base64 blocked list) for a professional portfolio.
 
 ## Deploy (socha3 Windows / IIS)
 
@@ -118,8 +136,8 @@ Restart-Service SnakeArcadeNode
 
 6. Smoke-test:
 
-- Direct: `http://127.0.0.1:3105/` and `/api/settings?player=`
-- Via IIS/Cloudflare: `https://snakearcade.socha3.com/` and `/api/settings?player=`
+- Direct: `http://127.0.0.1:3105/` and `/api/settings?player=` / `/api/players`
+- Via IIS/Cloudflare: `https://snakearcade.socha3.com/` and `/api/players`
 
 ### Do not delete
 
