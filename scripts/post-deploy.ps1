@@ -88,7 +88,7 @@ Write-Step "AppRoot: $AppRoot"
 
 if (-not (Test-Path -LiteralPath (Join-Path $AppRoot "server.js"))) {
 
-  throw "server.js not found under $AppRoot — copy the app first, then re-run."
+  throw "server.js not found under $AppRoot - copy the app first, then re-run."
 
 }
 
