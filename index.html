@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101418">
+  <title>Classic Snake</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="shell" aria-label="Classic Snake game">
+    <section class="game-panel">
+      <div class="top-bar">
+        <div>
+          <p class="eyebrow">HTML5 Canvas</p>
+          <h1>Classic Snake</h1>
+        </div>
+        <a class="developer-link" href="https://socha3.com">Meet the developer</a>
+        <div class="scoreboard" aria-label="Scoreboard">
+          <div>
+            <span>Score</span>
+            <strong id="score">0</strong>
+          </div>
+          <div>
+            <span>Best</span>
+            <strong id="best">0</strong>
+          </div>
+        </div>
+      </div>
+
+      <div class="canvas-wrap">
+        <canvas id="game" width="640" height="640" aria-label="Snake play field"></canvas>
+        <div id="overlay" class="overlay">
+          <h2>Press Start</h2>
+          <p>Use arrow keys, WASD, or swipe.</p>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button id="start" type="button">Start</button>
+        <button id="pause" type="button">Pause</button>
+        <button id="restart" type="button">Restart</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="game.js"></script>
+</body>
+</html>
