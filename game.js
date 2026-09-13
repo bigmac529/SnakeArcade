@@ -125,7 +125,7 @@
     if (window.showSaveFilePicker) {
       try {
         settingsFileHandle = settingsFileHandle || await window.showSaveFilePicker({
-          suggestedName: "snake-settings.json",
+          suggestedName: "snake-arcade-settings.json",
           types: [{ description: "JSON", accept: { "application/json": [".json"] } }]
         });
         await window.SnakeSettings.maybeWriteLocalFile(saved, settingsFileHandle);
@@ -142,7 +142,7 @@
   exportSettingsBtn.addEventListener("click", () => {
     applyName(nameInput.value, { persist: true });
     window.SnakeSettings.downloadSettings(persistSettings({}));
-    announce("Downloaded snake-settings.json.");
+    announce("Downloaded snake-arcade-settings.json.");
   });
   importSettingsInput.addEventListener("change", async () => {
     const file = importSettingsInput.files && importSettingsInput.files[0];

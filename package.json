@@ -1,8 +1,8 @@
 {
-  "name": "snakegame-socha3",
+  "name": "snake-arcade",
   "version": "1.0.0",
   "private": true,
-  "description": "Classic Snake with Express settings API",
+  "description": "SnakeArcade — HTML5 Canvas snake with Express settings API",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js"

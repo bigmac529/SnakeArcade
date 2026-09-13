@@ -5,7 +5,7 @@ const path = require("path");
 const ROOT = __dirname;
 const DATA_DIR = path.join(ROOT, "data");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = Number(process.env.PORT) || 3023;
 
 const app = express();
 app.use(express.json({ limit: "64kb" }));
@@ -119,5 +119,6 @@ app.use(express.static(ROOT));
 ensureDataStore();
 
 app.listen(PORT, () => {
-  console.log(`Classic Snake listening on http://localhost:${PORT}`);
+  console.log(`SnakeArcade listening on http://localhost:${PORT}`);
 });
+

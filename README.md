@@ -1,6 +1,6 @@
-# Classic Snake
+# SnakeArcade
 
-HTML5 Canvas Snake game recovered from [snakegame.socha3.com](https://snakegame.socha3.com), with a small Node.js Express backend for per-player settings.
+HTML5 Canvas snake game (live at [snakegame.socha3.com](https://snakegame.socha3.com)), with a small Node.js Express backend for per-player settings.
 
 ## Run locally
 
@@ -9,7 +9,7 @@ npm install
 npm start
 ```
 
-Visit [http://localhost:3000](http://localhost:3000).
+Visit [http://localhost:3023](http://localhost:3023).
 
 Optional: `PORT=8080 npm start`
 
@@ -20,18 +20,18 @@ Dev script is the same entrypoint: `npm run dev`.
 - Arrow keys or WASD
 - Swipe on the canvas
 - On-screen D-pad (narrow screens)
-- Start / Pause·Resume / Restart
+- Start / Pause–Resume / Restart
 - Sound toggle (`M`)
 - `P` to pause
 
 ## Files
 
-- `index.html` — page shell
-- `styles.css` — layout and theme
-- `game.js` — game loop and input
-- `settings.js` — localStorage + server settings helpers
-- `server.js` — Express static host + `/api/settings`
-- `data/settings.json` — per-player settings map (created at runtime; gitignored)
+- `index.html` - page shell
+- `styles.css` - layout and theme
+- `game.js` - game loop and input
+- `settings.js` - localStorage + server settings helpers
+- `server.js` - Express static host + `/api/settings`
+- `data/settings.json` - per-player settings map (created at runtime; gitignored)
 
 ## Player settings
 

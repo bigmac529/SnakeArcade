@@ -1,5 +1,6 @@
 (() => {
-  const SETTINGS_KEY = "classic-snake-settings-v1";
+  const SETTINGS_KEY = "snake-arcade-settings-v1";
+  const LEGACY_SETTINGS_KEY = "classic-snake-settings-v1";
   const LEGACY_BEST = "classic-snake-best";
   const LEGACY_MUTE = "classic-snake-muted";
 
@@ -129,7 +130,7 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "snake-settings.json";
+    a.download = "snake-arcade-settings.json";
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -189,3 +190,4 @@
     hydrateFromServer
   };
 })();
+
