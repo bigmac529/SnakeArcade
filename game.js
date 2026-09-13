@@ -140,7 +140,9 @@
     }
   });
   exportSettingsBtn.addEventListener("click", () => {
-    applyName(nameInput.value, { persist: true });
+    if (!applyName(nameInput.value, { persist: true })) {
+      return;
+    }
     window.SnakeSettings.downloadSettings(persistSettings({}));
     announce("Downloaded snake-arcade-settings.json.");
   });
@@ -151,10 +153,17 @@
     }
     try {
       const parsed = JSON.parse(await file.text());
-      const next = window.SnakeSettings.saveSettings({
+      const incoming = {
         ...window.SnakeSettings.loadSettings(),
         ...parsed
-      });
+      };
+      const nameCheck = window.SnakeSettings.validatePlayerName(incoming.playerName || "");
+      if (!nameCheck.ok) {
+        incoming.playerName = "";
+      } else {
+        incoming.playerName = nameCheck.name;
+      }
+      const next = window.SnakeSettings.saveSettings(incoming);
       settings = next;
       best = Number(next.best || 0);
       muted = Boolean(next.muted);
@@ -315,15 +324,19 @@
     }
   }
 
-  function persistSettings(patch) {
-    settings = window.SnakeSettings.saveSettings({
+  function persistSettings(patch = {}) {
+    const merged = {
       ...settings,
       playerName: nameInput.value.trim(),
       muted,
       difficulty: difficultyEl.value,
       best,
       ...patch
-    });
+    };
+    const nameCheck = window.SnakeSettings.validatePlayerName(merged.playerName);
+    // Never persist a rejected name from the input box via mute/pace/score saves.
+    merged.playerName = nameCheck.ok ? nameCheck.name : (settings.playerName || "");
+    settings = window.SnakeSettings.saveSettings(merged);
     return settings;
   }
 

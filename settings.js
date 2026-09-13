@@ -67,10 +67,24 @@
     return !hasName && !hasBest && !hasMute && !hasCustomDifficulty;
   }
 
-  function saveSettings(settings) {
-    const next = writeLocalCache({
+  function saveSettings(incoming) {
+    const current = loadSettings();
+    const merged = {
       ...defaultSettings(),
-      ...settings,
+      ...current,
+      ...incoming
+    };
+    const nameCheck = validatePlayerName(merged.playerName);
+    if (!nameCheck.ok) {
+      // Keep the last accepted name; never write a blocked string.
+      const fallback = validatePlayerName(current.playerName);
+      merged.playerName = fallback.ok ? fallback.name : "";
+    } else {
+      merged.playerName = nameCheck.name;
+    }
+
+    const next = writeLocalCache({
+      ...merged,
       updatedAt: new Date().toISOString()
     });
 
