@@ -19,20 +19,24 @@
         <div class="scoreboard" aria-label="Scoreboard">
           <div>
             <span>Score</span>
-            <strong id="score">0</strong>
+            <strong id="score" aria-live="polite">0</strong>
           </div>
           <div>
             <span>Best</span>
             <strong id="best">0</strong>
           </div>
+          <div>
+            <span>Speed</span>
+            <strong id="speed">1</strong>
+          </div>
         </div>
       </div>
 
       <div class="canvas-wrap">
-        <canvas id="game" width="640" height="640" aria-label="Snake play field"></canvas>
+        <canvas id="game" width="640" height="640" tabindex="0" aria-label="Snake play field"></canvas>
         <div id="overlay" class="overlay">
           <h2>Press Start</h2>
-          <p>Use arrow keys, WASD, or swipe.</p>
+          <p>Use arrow keys, WASD, swipe, or the pad.</p>
         </div>
       </div>
 
@@ -40,6 +44,16 @@
         <button id="start" type="button">Start</button>
         <button id="pause" type="button">Pause</button>
         <button id="restart" type="button">Restart</button>
+        <button id="mute" type="button" aria-pressed="false" title="Toggle sound">Sound: On</button>
+      </div>
+
+      <div class="dpad" aria-label="Direction pad">
+        <button type="button" data-dir="up" aria-label="Up">↑</button>
+        <div class="dpad-mid">
+          <button type="button" data-dir="left" aria-label="Left">←</button>
+          <button type="button" data-dir="right" aria-label="Right">→</button>
+        </div>
+        <button type="button" data-dir="down" aria-label="Down">↓</button>
       </div>
     </section>
   </main>

@@ -39,6 +39,7 @@ button {
   min-height: 44px;
   padding: 0 18px;
   border-radius: 6px;
+  touch-action: manipulation;
 }
 
 button:hover,
@@ -89,7 +90,7 @@ h1 {
 .scoreboard {
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(2, minmax(90px, 1fr));
+  grid-template-columns: repeat(3, minmax(80px, 1fr));
 }
 
 .developer-link {
@@ -120,7 +121,7 @@ h1 {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
-  min-width: 96px;
+  min-width: 84px;
   padding: 10px 14px;
   text-align: right;
 }
@@ -138,6 +139,10 @@ h1 {
   font-size: 1.55rem;
 }
 
+.scoreboard strong.best-flash {
+  color: var(--accent-2);
+}
+
 .canvas-wrap {
   aspect-ratio: 1;
   background: #0c1013;
@@ -153,6 +158,11 @@ canvas {
   display: block;
   height: 100%;
   width: 100%;
+}
+
+canvas:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .overlay {
@@ -181,10 +191,15 @@ canvas {
   color: var(--muted);
 }
 
+.overlay .new-best {
+  color: var(--accent-2);
+  font-weight: 800;
+}
+
 .controls {
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   margin-top: 16px;
 }
 
@@ -195,6 +210,41 @@ canvas {
 
 #restart {
   color: var(--accent-2);
+}
+
+#mute[aria-pressed="true"] {
+  color: var(--muted);
+}
+
+.dpad {
+  display: none;
+  gap: 8px;
+  justify-items: center;
+  margin-top: 16px;
+}
+
+.dpad > button,
+.dpad-mid button {
+  font-size: 1.25rem;
+  min-height: 52px;
+  min-width: 72px;
+  user-select: none;
+}
+
+.dpad-mid {
+  display: grid;
+  gap: 48px;
+  grid-template-columns: 1fr 1fr;
+}
+
+@media (max-width: 720px) {
+  .controls {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .dpad {
+    display: grid;
+  }
 }
 
 @media (max-width: 620px) {
@@ -212,14 +262,17 @@ canvas {
   }
 
   .scoreboard {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(3, 1fr);
   }
 
   .scoreboard div {
     text-align: left;
   }
+}
 
-  .controls {
-    grid-template-columns: 1fr;
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
   }
 }

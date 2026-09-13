@@ -3,42 +3,74 @@
   const ctx = canvas.getContext("2d");
   const scoreEl = document.querySelector("#score");
   const bestEl = document.querySelector("#best");
+  const speedEl = document.querySelector("#speed");
   const overlay = document.querySelector("#overlay");
   const startBtn = document.querySelector("#start");
   const pauseBtn = document.querySelector("#pause");
   const restartBtn = document.querySelector("#restart");
+  const muteBtn = document.querySelector("#mute");
 
   const cells = 24;
   const tile = canvas.width / cells;
-  const key = "classic-snake-best";
+  const bestKey = "classic-snake-best";
+  const muteKey = "classic-snake-muted";
   const initialSnake = [
     { x: 11, y: 12 },
     { x: 10, y: 12 },
     { x: 9, y: 12 }
   ];
+  const baseDelay = 125;
+  const minDelay = 68;
 
   let snake;
   let food;
   let direction;
   let queuedDirection;
   let score;
-  let best = Number(localStorage.getItem(key) || 0);
+  let best = Number(localStorage.getItem(bestKey) || 0);
   let running = false;
   let paused = false;
   let gameOver = false;
   let lastMove = 0;
-  let moveDelay = 125;
+  let moveDelay = baseDelay;
   let touchStart = null;
+  let foodPulse = 0;
+  let muted = localStorage.getItem(muteKey) === "1";
+  let audioCtx = null;
+  let beatBestThisRun = false;
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   bestEl.textContent = best;
+  updateMuteUi();
   reset();
   requestAnimationFrame(loop);
 
-  startBtn.addEventListener("click", start);
+  startBtn.addEventListener("click", () => {
+    start();
+    canvas.focus({ preventScroll: true });
+  });
   pauseBtn.addEventListener("click", togglePause);
   restartBtn.addEventListener("click", () => {
     reset();
     start();
+    canvas.focus({ preventScroll: true });
+  });
+  muteBtn.addEventListener("click", toggleMute);
+
+  document.querySelectorAll(".dpad [data-dir]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const map = {
+        up: { x: 0, y: -1 },
+        down: { x: 0, y: 1 },
+        left: { x: -1, y: 0 },
+        right: { x: 1, y: 0 }
+      };
+      queueDirection(map[btn.dataset.dir]);
+      if (!running && !gameOver) {
+        start();
+      }
+      canvas.focus({ preventScroll: true });
+    });
   });
 
   document.addEventListener("keydown", (event) => {
@@ -63,6 +95,10 @@
 
     if (event.key.toLowerCase() === "p") {
       togglePause();
+    }
+
+    if (event.key.toLowerCase() === "m") {
+      toggleMute();
     }
   });
 
@@ -91,13 +127,17 @@
   }, { passive: true });
 
   function start() {
+    ensureAudio();
+
     if (gameOver) {
       reset();
     }
 
     running = true;
     paused = false;
+    pauseBtn.textContent = "Pause";
     setOverlay(null);
+    beep(520, 0.05, "triangle", 0.03);
   }
 
   function togglePause() {
@@ -106,7 +146,23 @@
     }
 
     paused = !paused;
-    setOverlay(paused ? "Paused" : null, paused ? "Press P or Pause to continue." : "");
+    pauseBtn.textContent = paused ? "Resume" : "Pause";
+    setOverlay(paused ? "Paused" : null, paused ? "Press P, Resume, or keep playing." : "");
+  }
+
+  function toggleMute() {
+    muted = !muted;
+    localStorage.setItem(muteKey, muted ? "1" : "0");
+    updateMuteUi();
+    if (!muted) {
+      ensureAudio();
+      beep(440, 0.04, "sine", 0.03);
+    }
+  }
+
+  function updateMuteUi() {
+    muteBtn.textContent = muted ? "Sound: Off" : "Sound: On";
+    muteBtn.setAttribute("aria-pressed", muted ? "true" : "false");
   }
 
   function reset() {
@@ -114,13 +170,18 @@
     direction = { x: 1, y: 0 };
     queuedDirection = direction;
     score = 0;
-    moveDelay = 125;
+    moveDelay = baseDelay;
     running = false;
     paused = false;
     gameOver = false;
+    beatBestThisRun = false;
     scoreEl.textContent = score;
+    speedEl.textContent = "1";
+    bestEl.classList.remove("best-flash");
+    overlay.querySelector("p").classList.remove("new-best");
+    pauseBtn.textContent = "Pause";
     food = placeFood();
-    setOverlay("Press Start", "Use arrow keys, WASD, or swipe.");
+    setOverlay("Press Start", "Use arrow keys, WASD, swipe, or the pad.");
     draw();
   }
 
@@ -130,6 +191,7 @@
       lastMove = time;
     }
 
+    foodPulse = reduceMotion ? 0 : (foodPulse + 0.08) % (Math.PI * 2);
     draw();
     requestAnimationFrame(loop);
   }
@@ -151,24 +213,45 @@
     if (head.x === food.x && head.y === food.y) {
       score += 10;
       scoreEl.textContent = score;
-      moveDelay = Math.max(68, moveDelay - 3);
+      moveDelay = Math.max(minDelay, moveDelay - 3);
+      speedEl.textContent = String(speedLevel());
       food = placeFood();
+      beep(760, 0.06, "square", 0.035);
+
+      if (score > best) {
+        best = score;
+        localStorage.setItem(bestKey, best);
+        bestEl.textContent = best;
+        bestEl.classList.add("best-flash");
+        if (!beatBestThisRun) {
+          beatBestThisRun = true;
+          beep(880, 0.08, "sine", 0.04);
+        }
+      }
     } else {
       snake.pop();
     }
   }
 
+  function speedLevel() {
+    return Math.max(1, Math.round((baseDelay - moveDelay) / 3) + 1);
+  }
+
   function finish() {
     running = false;
     gameOver = true;
+    pauseBtn.textContent = "Pause";
+    beep(180, 0.18, "sawtooth", 0.04);
 
-    if (score > best) {
-      best = score;
-      localStorage.setItem(key, best);
-      bestEl.textContent = best;
+    const detail = beatBestThisRun
+      ? `New best: ${best}`
+      : "Press Restart or Enter to play again.";
+    setOverlay("Game Over", detail);
+    if (beatBestThisRun) {
+      overlay.querySelector("p").classList.add("new-best");
+    } else {
+      overlay.querySelector("p").classList.remove("new-best");
     }
-
-    setOverlay("Game Over", "Press Restart or Enter to play again.");
   }
 
   function draw() {
@@ -176,8 +259,15 @@
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     drawGrid();
 
+    const pulse = reduceMotion ? 0 : Math.sin(foodPulse) * 2;
     ctx.fillStyle = "#f2c94c";
-    roundRect(food.x * tile + 5, food.y * tile + 5, tile - 10, tile - 10, 7);
+    roundRect(
+      food.x * tile + 5 - pulse / 2,
+      food.y * tile + 5 - pulse / 2,
+      tile - 10 + pulse,
+      tile - 10 + pulse,
+      7
+    );
     ctx.fill();
 
     snake.forEach((part, index) => {
@@ -263,6 +353,49 @@
 
     overlay.classList.remove("hidden");
     overlay.querySelector("h2").textContent = title;
-    overlay.querySelector("p").textContent = message;
+    const p = overlay.querySelector("p");
+    p.textContent = message;
+    if (!message.startsWith("New best:")) {
+      p.classList.remove("new-best");
+    }
+  }
+
+  function ensureAudio() {
+    if (muted || audioCtx) {
+      return;
+    }
+
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) {
+      return;
+    }
+
+    audioCtx = new Ctx();
+  }
+
+  function beep(freq, duration, type, gainValue) {
+    if (muted) {
+      return;
+    }
+
+    ensureAudio();
+    if (!audioCtx) {
+      return;
+    }
+
+    if (audioCtx.state === "suspended") {
+      audioCtx.resume();
+    }
+
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = type;
+    osc.frequency.value = freq;
+    gain.gain.value = gainValue;
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
+    osc.stop(audioCtx.currentTime + duration + 0.02);
   }
 })();
