@@ -4,8 +4,8 @@
   "private": true,
   "description": "SnakeArcade — HTML5 Canvas snake with Express settings API",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js"
+    "start": "node scripts/start.js",
+    "dev": "node scripts/start.js"
   },
   "dependencies": {
     "express": "^4.21.2"
