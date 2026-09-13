@@ -176,6 +176,9 @@
 
   document.querySelectorAll(".dpad [data-dir]").forEach((btn) => {
     btn.addEventListener("click", () => {
+      if (!running || gameOver) {
+        return;
+      }
       const map = {
         up: { x: 0, y: -1 },
         down: { x: 0, y: 1 },
@@ -183,34 +186,52 @@
         right: { x: 1, y: 0 }
       };
       queueDirection(map[btn.dataset.dir]);
-      if (!running && !gameOver) {
-        start();
-      }
       canvas.focus({ preventScroll: true });
     });
   });
 
+  function isFormField(target) {
+    if (!target || !target.tagName) {
+      return false;
+    }
+    const tag = target.tagName.toLowerCase();
+    if (tag === "input" || tag === "textarea" || tag === "select") {
+      return true;
+    }
+    return Boolean(target.isContentEditable);
+  }
+
   document.addEventListener("keydown", (event) => {
+    // Typing a name (or other form field) must never move/start the snake.
+    if (isFormField(event.target)) {
+      return;
+    }
+
     const next = directionFromKey(event.key);
 
     if (next) {
+      if (!running || gameOver) {
+        return;
+      }
       event.preventDefault();
       queueDirection(next);
-      if (!running && !gameOver) {
-        start();
-      }
       return;
     }
 
     if (event.key === " " || event.key === "Enter") {
-      event.preventDefault();
-      if (gameOver) {
-        reset();
+      // Start / Restart are button-only; Space/Enter only toggle pause while playing.
+      if (!running || gameOver) {
+        return;
       }
-      start();
+      event.preventDefault();
+      togglePause();
+      return;
     }
 
     if (event.key.toLowerCase() === "p") {
+      if (!running || gameOver) {
+        return;
+      }
       togglePause();
     }
 
@@ -234,10 +255,13 @@
     const dy = touch.clientY - touchStart.y;
 
     if (Math.max(Math.abs(dx), Math.abs(dy)) > 20) {
+      if (!running || gameOver) {
+        touchStart = null;
+        return;
+      }
       queueDirection(Math.abs(dx) > Math.abs(dy)
         ? { x: Math.sign(dx), y: 0 }
         : { x: 0, y: Math.sign(dy) });
-      start();
     }
 
     touchStart = null;
@@ -351,7 +375,7 @@
     overlay.querySelector("p").classList.remove("new-best");
     pauseBtn.textContent = "Pause";
     food = placeFood();
-    setOverlay("Press Start", "Use arrow keys, WASD, swipe, or the pad.");
+    setOverlay("Press Start", "Tap Start to play. Then use arrow keys, WASD, swipe, or the pad.");
     draw();
   }
 
