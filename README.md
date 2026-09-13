@@ -9,6 +9,8 @@ npm install
 npm start
 ```
 
+`npm start` frees port 3023 if something is already listening, starts the server, and opens http://127.0.0.1:3023/ in your default browser.
+
 Visit [http://localhost:3023](http://localhost:3023).
 
 Optional: `PORT=8080 npm start`
