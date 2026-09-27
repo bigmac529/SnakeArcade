@@ -9,7 +9,7 @@ npm install
 npm start
 ```
 
-`npm start` frees port 3023 if something is already listening, starts the server, and opens http://127.0.0.1:3023/ in your default browser.
+`npm start` frees port 3023 if something is already listening, starts the server, and opens http://localhost:3023/ in your default browser.
 
 Visit [http://localhost:3023](http://localhost:3023).
 
@@ -104,7 +104,7 @@ Store shape:
 }
 ```
 
-Writes use a `.lock` file (`wx` + retries/backoff/jitter) and bump `revision` each successful write. The HTTP server binds `127.0.0.1` only (not `localhost`: on Windows with Node 17+ that can resolve to IPv6 `::1` only, and IIS ARR proxies to `127.0.0.1`, which then fails with 502).
+Writes use a `.lock` file (`wx` + retries/backoff/jitter) and bump `revision` each successful write. The HTTP server binds `localhost` only. On Windows with Node 17+ `localhost` may resolve to IPv6 `::1` only, so the IIS reverse proxy targets `http://localhost:3105` (not `127.0.0.1`); that works whether Node ends up on `::1` or `127.0.0.1`.
 
 Names are filtered client- and server-side (base64 blocked list) for a professional portfolio.
 
@@ -115,8 +115,8 @@ Production target:
 - Public URL: `https://snakearcade.socha3.com`
 - App folder: `C:\WebApps\SnakeArcade`
 - Node service: Windows service `SnakeArcadeNode` (WinSW), auto-start
-- Node listens on `127.0.0.1:3105` (`PORT=3105` set by the service)
-- IIS site `SnakeArcade` reverse-proxies to that port via URL Rewrite + ARR (`web.config`)
+- Node listens on `localhost:3105` (`PORT=3105` set by the service; on Windows Server 2025 / Node 24 this is `[::1]:3105`)
+- IIS site `SnakeArcade` reverse-proxies to `http://localhost:3105` via URL Rewrite + ARR (`web.config`). Do not point it at `127.0.0.1`: Node is not listening on IPv4 and ARR returns 502.
 
 ### Before first public deploy
 
@@ -126,8 +126,8 @@ Fix these in the app (not optional for a public site):
 2. Bind the HTTP server to loopback only, since IIS owns the public ports:
 
 ```js
-app.listen(PORT, "127.0.0.1", () => {
-  console.log(`SnakeArcade listening on http://127.0.0.1:${PORT}`);
+app.listen(PORT, "localhost", () => {
+  console.log(`SnakeArcade listening on http://localhost:${PORT}`);
 });
 ```
 
@@ -142,7 +142,7 @@ Steps: checkout, use the Node.js already installed on the server, `npm ci --omit
 1. Stops `SnakeArcadeNode`.
 2. Backs up `data\settings.json` to `C:\WebApps\SnakeArcade-backups`.
 3. Mirrors the checkout into `C:\WebApps\SnakeArcade` with `robocopy /MIR`, excluding `data\`, `.git\`, `.github\`, `logs\`, `web.config`, `*.log` and the WinSW files (robocopy exit codes 0-7 = success, 8+ = failure), then verifies `settings.json` is unchanged.
-4. Starts the service and polls `http://127.0.0.1:3105/api/health` until `ok: true` (the job fails otherwise), then checks the public URL (the job fails if it never answers).
+4. Starts the service and polls `http://localhost:3105/api/health` until `ok: true` (the job fails otherwise), then checks the public URL. The workflow passes `-RequirePublicHealthy`, so the job fails if the public URL never returns `ok: true` (e.g. an IIS/ARR 502). Health URLs get a cache-busting query string because ARR caches `/api/health` briefly.
 
 Paths, service name and port are parameters at the top of `scripts/deploy.ps1` and in the workflow `env:`. Preview a deploy without changing anything: `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\deploy.ps1 -DryRun`.
 
@@ -157,14 +157,14 @@ cd C:\WebApps\SnakeArcade
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\post-deploy.ps1
 ```
 
-That script installs npm deps (`npm ci` / `npm install --omit=dev`), ensures `data\` and `web.config` (creates `web.config` only if missing), restarts `SnakeArcadeNode`, and smoke-tests `http://127.0.0.1:3105/`.
+That script installs npm deps (`npm ci` / `npm install --omit=dev`), ensures `data\` and `web.config` (creates `web.config` only if missing), restarts `SnakeArcadeNode`, and smoke-tests `http://localhost:3105/`.
 
 Optional: `-SkipNpm`, `-AppRoot C:\WebApps\SnakeArcade`, `-Port 3105`.
 
 ### Deploy steps
 
 1. Copy app files into `C:\WebApps\SnakeArcade` (or sync from this repo).
-2. **Keep** the server `web.config` that rewrites to `http://127.0.0.1:3105/{R:1}`. Do not overwrite it with an empty/missing file from git if the repo has no `web.config`.
+2. **Keep** the server `web.config` that rewrites to `http://localhost:3105/{R:1}` (use `localhost`, not `127.0.0.1`). Do not overwrite it with an empty/missing file from git if the repo has no `web.config`.
 3. On the server, in the app folder:
 
 ```powershell
@@ -182,7 +182,7 @@ Restart-Service SnakeArcadeNode
 
 6. Smoke-test:
 
-- Direct: `http://127.0.0.1:3105/` and `/api/settings?player=` / `/api/players`
+- Direct: `http://localhost:3105/` and `/api/settings?player=` / `/api/players`
 - Via IIS/Cloudflare: `https://snakearcade.socha3.com/` and `/api/players`
 
 ### Do not delete

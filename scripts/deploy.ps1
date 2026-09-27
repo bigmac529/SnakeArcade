@@ -17,7 +17,7 @@
        plus anything passed in -ExtraExcludeDirs / -ExtraExcludeFiles.
     5. Verify data\settings.json is byte-identical (restore from backup if not).
     6. Start the service.
-    7. Poll http://127.0.0.1:<Port>/api/health (the same IPv4 address IIS proxies to) until it answers ok=true,
+    7. Poll http://localhost:<Port>/api/health until it answers ok=true,
        then (optionally) the public URL.
 
   Robocopy exit codes 0-7 are success; 8 or higher is a failure.
@@ -93,7 +93,11 @@ function Start-AppService([string]$Name, [int]$TimeoutSeconds) {
 function Test-HealthUrl([string]$Url, [int]$Retries, [int]$DelaySeconds, [int]$ExpectedPort) {
   for ($i = 1; $i -le $Retries; $i++) {
     try {
-      $resp = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 10 `
+      # Cache-busting query: IIS ARR caches /api/health briefly and ignores the
+      # request Cache-Control header, so a stale 200 could mask a 502.
+      $sep = if ($Url.Contains("?")) { "&" } else { "?" }
+      $probe = "$Url${sep}nocache=$([DateTime]::UtcNow.Ticks)"
+      $resp = Invoke-WebRequest -Uri $probe -UseBasicParsing -TimeoutSec 10 `
         -Headers @{ "Cache-Control" = "no-cache" }
       $body = $resp.Content | ConvertFrom-Json
       if ([int]$resp.StatusCode -eq 200 -and $body.ok -eq $true) {
@@ -280,7 +284,7 @@ try {
 
   # ------------------------------------------------------------------ health
   Write-Step "Health check (local)"
-  $localHealth = "http://127.0.0.1:$Port/api/health"
+  $localHealth = "http://localhost:$Port/api/health"
   if (-not (Test-HealthUrl -Url $localHealth -Retries $HealthRetries -DelaySeconds $HealthDelaySeconds -ExpectedPort $Port)) {
     throw "Local health check failed: $localHealth did not return ok=true after $HealthRetries tries."
   }
