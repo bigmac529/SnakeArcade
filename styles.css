@@ -404,6 +404,215 @@ canvas:focus-visible {
   color: var(--muted);
 }
 
+/* Settings: gear icon + label. Opens the display settings dialog. */
+.settings-btn {
+  align-items: center;
+  display: inline-flex;
+  -webkit-tap-highlight-color: transparent;
+  gap: 7px;
+  justify-content: center;
+}
+
+.settings-btn svg {
+  fill: none;
+  flex: none;
+  height: 1.15em;
+  pointer-events: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+  width: 1.15em;
+}
+
+.settings-btn[aria-expanded="true"] {
+  border-color: var(--accent);
+}
+
+/* ---------- Settings dialog ---------- */
+.modal-backdrop {
+  align-items: center;
+  background: rgba(4, 7, 9, 0.72);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding:
+    max(12px, env(safe-area-inset-top))
+    max(12px, env(safe-area-inset-right))
+    max(12px, env(safe-area-inset-bottom))
+    max(12px, env(safe-area-inset-left));
+  position: fixed;
+  z-index: 100;
+}
+
+.modal-backdrop[hidden] {
+  display: none;
+}
+
+.modal {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+  display: grid;
+  gap: 14px;
+  max-height: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 18px;
+  width: min(440px, 100%);
+}
+
+.modal h2 {
+  font-size: 1.25rem;
+  margin: 0;
+}
+
+.modal-desc {
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.4;
+  margin: 0;
+}
+
+.switch-list {
+  display: grid;
+  gap: 10px;
+}
+
+.switch-row {
+  align-items: center;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+  padding: 10px 12px;
+}
+
+.switch-row label {
+  cursor: pointer;
+  display: grid;
+  gap: 3px;
+}
+
+.switch-title {
+  font-weight: 700;
+}
+
+.switch-hint {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.3;
+}
+
+/* Toggle switch: a native checkbox (role="switch") restyled. */
+input.switch {
+  appearance: none;
+  -webkit-appearance: none;
+  background: #3a444d;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+  flex: none;
+  height: 28px;
+  margin: 0;
+  position: relative;
+  transition: background-color 0.15s ease;
+  width: 48px;
+}
+
+input.switch::before {
+  background: #dfe6ea;
+  border-radius: 50%;
+  content: "";
+  height: 20px;
+  left: 3px;
+  position: absolute;
+  top: 3px;
+  transition: transform 0.15s ease;
+  width: 20px;
+}
+
+input.switch:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+input.switch:checked::before {
+  background: #102015;
+  transform: translateX(20px);
+}
+
+input.switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.choice-group {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 12px 12px;
+}
+
+.choice-group legend {
+  font-weight: 700;
+  padding: 0 4px;
+}
+
+.choice {
+  align-items: center;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  gap: 12px;
+  padding: 8px 10px;
+}
+
+.choice:has(input:checked) {
+  border-color: var(--accent);
+}
+
+.choice input {
+  accent-color: var(--accent);
+  flex: none;
+  height: 20px;
+  margin: 0;
+  width: 20px;
+}
+
+.choice input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.choice-text {
+  display: grid;
+  gap: 2px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+#settings-close {
+  background: var(--accent);
+  color: #102015;
+  min-width: 104px;
+}
+
+html.modal-open,
+html.modal-open body {
+  overflow: hidden;
+}
+
 .stage {
   display: grid;
   gap: 10px;
@@ -800,15 +1009,30 @@ button:disabled,
     font-size: 0.78rem;
   }
 
+  /* Two rows on phones: Difficulty and Settings, then Start / Pause /
+     End game / Sound (so the difficulty tooltip, which opens above the
+     dropdown, never covers Start). In play only Pause is left: one row. */
   .toolbar {
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     gap: 6px;
   }
 
+  .toolbar .difficulty {
+    order: -2;
+  }
+
   .controls {
+    flex: 1 0 100%;
     gap: 6px;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     min-width: 0;
+  }
+
+  .settings-btn {
+    font-size: 0.85rem;
+    margin-left: auto;
+    order: -1;
+    padding: 0 12px;
   }
 
   .controls button,
@@ -830,6 +1054,13 @@ button:disabled,
     min-height: clamp(64px, 11dvh, 110px);
   }
 
+  /* Before Start / paused the turn buttons do nothing, so they give up a
+     little height to the extra toolbar row (keeps the 24x24 board). In play
+     they grow into the spare height again (min 64px). */
+  html:not(.is-playing) .turn-btn {
+    min-height: clamp(52px, 8dvh, 100px);
+  }
+
   /* While a run is live, collapse the setup UI so the arena + buttons dominate.
      Pause brings everything back. */
   .is-playing .player-panel,
@@ -838,6 +1069,7 @@ button:disabled,
   .is-playing #start,
   .is-playing #end-game,
   .is-playing #mute,
+  .is-playing .settings-btn,
   .is-playing .difficulty {
     display: none;
   }
