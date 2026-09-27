@@ -15,9 +15,21 @@
   const boardEl = document.querySelector("#arcade-board");
   const boardListEl = document.querySelector("#arcade-board-list");
   const boardMetaEl = document.querySelector("#arcade-board-meta");
+  const stageEl = document.querySelector("#stage");
+  const arenaSlot = document.querySelector("#arena-slot");
+  const canvasWrap = document.querySelector("#canvas-wrap");
+  const shellEl = document.querySelector(".shell");
+  const turnButtons = document.querySelectorAll(".turn-btn[data-turn]");
+  const rootEl = document.documentElement;
 
   const cells = 24;
-  const tile = canvas.width / cells;
+  // Design-time tile size (640px board / 24 cells); drawing insets scale from it.
+  const designTile = 640 / cells;
+  const minArena = 180;
+  const maxArena = 640;
+  const maxQueuedTurns = 2;
+  let tile = canvas.width / cells;
+  let drawScale = tile / designTile;
   const initialSnake = [
     { x: 11, y: 12 },
     { x: 10, y: 12 },
@@ -39,7 +51,9 @@
   let snake;
   let food;
   let direction;
-  let queuedDirection;
+  // Pending heading changes, applied one per tick so two quick turns can never
+  // add up to a 180-degree reversal inside a single step.
+  let turnQueue = [];
   let score;
   let best = Number(settings.best || 0);
   let running = false;
@@ -47,7 +61,6 @@
   let gameOver = false;
   let lastMove = 0;
   let moveDelay = baseDelay;
-  let touchStart = null;
   let foodPulse = 0;
   let muted = Boolean(settings.muted);
   let audioCtx = null;
@@ -73,6 +86,7 @@
   updateMuteUi();
   applyName(settings.playerName || "", { silent: true, persist: false });
   updateStartGateUi();
+  layoutArena();
   reset();
   requestAnimationFrame(loop);
   refreshArcadeBoard();
@@ -227,21 +241,48 @@
     }
   });
 
-  document.querySelectorAll(".dpad [data-dir]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      if (!running || gameOver) {
+  turnButtons.forEach((btn) => {
+    // pointerdown fires immediately on touch (no 300ms click delay); the CSS
+    // sets touch-action: none so the browser never scrolls or zooms from here.
+    btn.addEventListener("pointerdown", (event) => {
+      if (event.pointerType === "mouse" && event.button !== 0) {
         return;
       }
-      const map = {
-        up: { x: 0, y: -1 },
-        down: { x: 0, y: 1 },
-        left: { x: -1, y: 0 },
-        right: { x: 1, y: 0 }
-      };
-      queueDirection(map[btn.dataset.dir]);
-      canvas.focus({ preventScroll: true });
+      event.preventDefault();
+      btn.classList.add("is-pressed");
+      turn(btn.dataset.turn);
     });
+    const release = () => btn.classList.remove("is-pressed");
+    btn.addEventListener("pointerup", release);
+    btn.addEventListener("pointercancel", release);
+    btn.addEventListener("pointerleave", release);
+    // Deliberately no "click" handler: taps would then turn twice (pointerdown +
+    // click). Keyboard players get the same relative turns from Left/Right
+    // arrows and A / D (see the keydown handler).
+    btn.addEventListener("contextmenu", (event) => event.preventDefault());
   });
+
+  // Keep the page from panning while a game is live (belt and braces for iOS,
+  // which does not always honour overflow: hidden on the root).
+  stageEl.addEventListener("touchmove", (event) => {
+    if (rootEl.classList.contains("is-playing")) {
+      event.preventDefault();
+    }
+  }, { passive: false });
+
+  window.addEventListener("resize", scheduleLayout);
+  window.addEventListener("orientationchange", scheduleLayout);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", scheduleLayout);
+  }
+  if (window.ResizeObserver) {
+    const ro = new ResizeObserver(scheduleLayout);
+    [arenaSlot, document.querySelector(".top-bar"), document.querySelector(".player-panel"),
+      document.querySelector(".toolbar")].forEach((el) => el && ro.observe(el));
+  }
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(scheduleLayout);
+  }
 
   function isFormField(target) {
     if (!target || !target.tagName) {
@@ -260,14 +301,29 @@
       return;
     }
 
-    const next = directionFromKey(event.key);
+    // Leave browser shortcuts (Ctrl+A, Cmd+D, Alt+Arrow, ...) alone.
+    const hasModifier = event.ctrlKey || event.metaKey || event.altKey;
+    const side = hasModifier ? null : turnFromKey(event.key);
 
-    if (next) {
+    if (side) {
+      // Keys never start a run; they only steer while one is live.
       if (!running || gameOver) {
         return;
       }
       event.preventDefault();
-      queueDirection(next);
+      // Holding a key must not spin the snake: one press = one turn, like
+      // one tap on an on-screen button.
+      if (!paused && !event.repeat) {
+        turn(side);
+      }
+      return;
+    }
+
+    if (!hasModifier && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+      // Up/Down no longer steer, but still must not scroll the page mid-run.
+      if (running && !gameOver) {
+        event.preventDefault();
+      }
       return;
     }
 
@@ -292,33 +348,6 @@
       toggleMute();
     }
   });
-
-  canvas.addEventListener("touchstart", (event) => {
-    const touch = event.changedTouches[0];
-    touchStart = { x: touch.clientX, y: touch.clientY };
-  }, { passive: true });
-
-  canvas.addEventListener("touchend", (event) => {
-    if (!touchStart) {
-      return;
-    }
-
-    const touch = event.changedTouches[0];
-    const dx = touch.clientX - touchStart.x;
-    const dy = touch.clientY - touchStart.y;
-
-    if (Math.max(Math.abs(dx), Math.abs(dy)) > 20) {
-      if (!running || gameOver) {
-        touchStart = null;
-        return;
-      }
-      queueDirection(Math.abs(dx) > Math.abs(dy)
-        ? { x: Math.sign(dx), y: 0 }
-        : { x: 0, y: Math.sign(dy) });
-    }
-
-    touchStart = null;
-  }, { passive: true });
 
   function applyPace() {
     baseDelay = paceDelays[difficultyEl.value] || 125;
@@ -382,7 +411,7 @@
         } else if (!running && !gameOver) {
           setOverlay(
             "Press Start",
-            "Tap Start to play. Then use arrow keys, WASD, swipe, or the pad."
+            "Tap Start to play. Then steer with the Left / Right buttons (or ← / → or A / D keys)."
           );
         }
       }
@@ -403,6 +432,8 @@
     paused = false;
     pauseBtn.textContent = "Pause";
     setOverlay(null);
+    updatePlayState();
+    window.scrollTo(0, 0);
     announce("Game started.");
     beep(520, 0.05, "triangle", 0.03);
   }
@@ -416,6 +447,7 @@
     pauseBtn.textContent = paused ? "Resume" : "Pause";
     setOverlay(paused ? "Paused" : null, paused ? "Press P, Resume, or keep playing." : "");
     announce(paused ? "Paused." : "Resumed.");
+    updatePlayState();
   }
 
   function toggleMute() {
@@ -570,7 +602,8 @@
   function reset() {
     snake = initialSnake.map((part) => ({ ...part }));
     direction = { x: 1, y: 0 };
-    queuedDirection = direction;
+    turnQueue = [];
+    canvas.dataset.heading = headingName(direction);
     score = 0;
     applyPace();
     moveDelay = baseDelay;
@@ -585,7 +618,7 @@
     pauseBtn.textContent = "Pause";
     food = placeFood();
     if (canStart()) {
-      setOverlay("Press Start", "Tap Start to play. Then use arrow keys, WASD, swipe, or the pad.");
+      setOverlay("Press Start", "Tap Start to play. Then steer with the Left / Right buttons (or ← / → or A / D keys).");
     } else {
       setOverlay(
         "Save a name",
@@ -593,6 +626,7 @@
       );
     }
     updateStartGateUi();
+    updatePlayState();
     draw();
   }
 
@@ -608,7 +642,10 @@
   }
 
   function step() {
-    direction = queuedDirection;
+    if (turnQueue.length) {
+      direction = turnQueue.shift();
+      canvas.dataset.heading = headingName(direction);
+    }
     const head = {
       x: snake[0].x + direction.x,
       y: snake[0].y + direction.y
@@ -652,12 +689,14 @@
   function finish() {
     running = false;
     gameOver = true;
+    turnQueue = [];
     pauseBtn.textContent = "Pause";
+    updatePlayState();
     beep(180, 0.18, "sawtooth", 0.04);
 
     const detail = beatBestThisRun
       ? `New best: ${best}`
-      : "Press Restart or Enter to play again.";
+      : "Press Restart to play again.";
     announce(beatBestThisRun ? `Game over. New best ${best}.` : `Game over. Score ${score}.`);
     setOverlay("Game Over", detail);
     if (beatBestThisRun) {
@@ -673,30 +712,34 @@
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     drawGrid();
 
-    const pulse = reduceMotion ? 0 : Math.sin(foodPulse) * 2;
+    const k = drawScale;
+    const pulse = reduceMotion ? 0 : Math.sin(foodPulse) * 2 * k;
     ctx.fillStyle = "#f2c94c";
     roundRect(
-      food.x * tile + 5 - pulse / 2,
-      food.y * tile + 5 - pulse / 2,
-      tile - 10 + pulse,
-      tile - 10 + pulse,
-      7
+      food.x * tile + 5 * k - pulse / 2,
+      food.y * tile + 5 * k - pulse / 2,
+      tile - 10 * k + pulse,
+      tile - 10 * k + pulse,
+      7 * k
     );
     ctx.fill();
 
     snake.forEach((part, index) => {
       ctx.fillStyle = index === 0 ? "#a7f08d" : "#86d672";
-      roundRect(part.x * tile + 3, part.y * tile + 3, tile - 6, tile - 6, 6);
+      roundRect(part.x * tile + 3 * k, part.y * tile + 3 * k, tile - 6 * k, tile - 6 * k, 6 * k);
       ctx.fill();
     });
   }
 
   function drawGrid() {
     ctx.strokeStyle = "rgba(255,255,255,0.08)";
-    ctx.lineWidth = 1;
+    const lineWidth = Math.max(1, Math.round(drawScale));
+    // Odd widths need a half-pixel offset to land on whole device pixels.
+    const offset = lineWidth % 2 ? 0.5 : 0;
+    ctx.lineWidth = lineWidth;
 
     for (let i = 1; i < cells; i += 1) {
-      const pos = i * tile;
+      const pos = Math.round(i * tile) + offset;
       ctx.beginPath();
       ctx.moveTo(pos, 0);
       ctx.lineTo(pos, canvas.height);
@@ -735,28 +778,119 @@
     return snake.some((part) => part.x === head.x && part.y === head.y);
   }
 
-  function queueDirection(next) {
-    if (next.x === -direction.x && next.y === -direction.y) {
-      return;
-    }
-
-    queuedDirection = next;
+  function lastPlannedDirection() {
+    return turnQueue.length ? turnQueue[turnQueue.length - 1] : direction;
   }
 
-  function directionFromKey(keyName) {
-    const normalized = keyName.toLowerCase();
-    const map = {
-      arrowup: { x: 0, y: -1 },
-      w: { x: 0, y: -1 },
-      arrowdown: { x: 0, y: 1 },
-      s: { x: 0, y: 1 },
-      arrowleft: { x: -1, y: 0 },
-      a: { x: -1, y: 0 },
-      arrowright: { x: 1, y: 0 },
-      d: { x: 1, y: 0 }
-    };
+  // Relative turn, shared by the on-screen buttons and the keyboard
+  // (Left/Right arrows, A / D). Left = 90deg counter-clockwise,
+  // Right = 90deg clockwise, measured from the heading after queued turns.
+  // Canvas y grows downward, so CCW maps (x, y) -> (y, -x).
+  function turn(side) {
+    if (!running || paused || gameOver) {
+      return;
+    }
+    const base = lastPlannedDirection();
+    const next = side === "left"
+      ? { x: base.y, y: -base.x }
+      : { x: -base.y, y: base.x };
+    if (turnQueue.length >= maxQueuedTurns) {
+      return;
+    }
+    turnQueue.push(next);
+  }
 
-    return map[normalized];
+  function headingName(dir) {
+    if (dir.x === 1) return "right";
+    if (dir.x === -1) return "left";
+    if (dir.y === -1) return "up";
+    return "down";
+  }
+
+  function updatePlayState() {
+    const playing = running && !paused && !gameOver;
+    rootEl.classList.toggle("is-playing", playing);
+    rootEl.dataset.state = playing ? "playing" : paused ? "paused" : gameOver ? "over" : "ready";
+    // Hidden panels change what sits above the arena, so resize right away.
+    layoutArena();
+  }
+
+  let layoutFrame = 0;
+  function scheduleLayout() {
+    if (layoutFrame) {
+      return;
+    }
+    layoutFrame = requestAnimationFrame(() => {
+      layoutFrame = 0;
+      layoutArena();
+    });
+  }
+
+  function viewportHeight() {
+    const vv = window.visualViewport;
+    // When pinch-zoomed the visual viewport shrinks; fall back to the layout viewport.
+    if (vv && Math.abs(vv.scale - 1) < 0.01) {
+      return vv.height;
+    }
+    return window.innerHeight;
+  }
+
+  // Size the square board from the space actually left on screen: width of the
+  // arena slot, and viewport height minus everything above the arena and the
+  // turn buttons / padding below it. Backing store is snapped to a whole number
+  // of device pixels per cell so the grid stays crisp on high-DPR screens.
+  function layoutArena() {
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const slotRect = arenaSlot.getBoundingClientRect();
+    const slotTop = slotRect.top + window.scrollY;
+    // Space the turn buttons need under the arena. Use their CSS minimum height
+    // (they may stretch to fill leftover space during play, which must not
+    // shrink the arena). In landscape they sit beside the arena instead.
+    const firstBtn = turnButtons[0];
+    const btnRect = firstBtn.getBoundingClientRect();
+    const beside = btnRect.top < slotRect.bottom - 1;
+    const stageGap = parseFloat(getComputedStyle(stageEl).rowGap) || 0;
+    const btnMin = parseFloat(getComputedStyle(firstBtn).minHeight) || btnRect.height;
+    const belowArena = beside ? 0 : stageGap + btnMin;
+    const shellStyle = getComputedStyle(shellEl);
+    const padBottom = parseFloat(shellStyle.paddingBottom) || 0;
+    const availH = viewportHeight() - slotTop - belowArena - padBottom;
+    const availW = arenaSlot.clientWidth;
+    let cssSize = Math.floor(Math.min(availW, availH, maxArena));
+    cssSize = Math.max(Math.min(minArena, availW), cssSize);
+
+    const tileDevice = Math.max(4, Math.floor((cssSize * dpr) / cells));
+    const devicePx = tileDevice * cells;
+    const finalCss = devicePx / dpr;
+
+    if (canvas.width !== devicePx) {
+      canvas.width = devicePx;
+      canvas.height = devicePx;
+    }
+    const cssText = `${finalCss}px`;
+    if (canvasWrap.style.width !== cssText) {
+      canvasWrap.style.width = cssText;
+      canvasWrap.style.height = cssText;
+      stageEl.style.setProperty("--arena-size", cssText);
+    }
+    tile = tileDevice;
+    drawScale = tile / designTile;
+    if (snake && food) {
+      draw();
+    }
+  }
+
+  // Keyboard steering is relative, exactly like the on-screen buttons:
+  // ArrowLeft / A = turn left (CCW), ArrowRight / D = turn right (CW).
+  // Up/Down and W/S intentionally do nothing.
+  function turnFromKey(keyName) {
+    const map = {
+      arrowleft: "left",
+      a: "left",
+      arrowright: "right",
+      d: "right"
+    };
+    return map[String(keyName || "").toLowerCase()] || null;
   }
 
   function setOverlay(title, message = "") {

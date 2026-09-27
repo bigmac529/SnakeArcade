@@ -9,7 +9,7 @@ npm install
 npm start
 ```
 
-`npm start` frees port 3023 if something is already listening, starts the server, and opens http://127.0.0.1:3023/ in your default browser.
+`npm start` frees port 3023 if something is already listening, starts the server, and opens http://localhost:3023/ in your default browser.
 
 Visit [http://localhost:3023](http://localhost:3023).
 
@@ -19,19 +19,44 @@ Dev script is the same entrypoint: `npm run dev`.
 
 ## Controls
 
-- Arrow keys or WASD
-- Swipe on the canvas
-- On-screen D-pad (narrow screens)
-- Start / Pause–Resume / Restart (Start requires a saved PG name this session)
-- Sound toggle (`M`)
-- `P` to pause
+**Start** (or the **Start game** button on the board) is the only way to begin a run, and it needs a saved PG name this session. Taps, key presses, and the turn buttons never start a game.
+
+### Phone / touch: two buttons
+
+- **Left** turns the snake 90° counter-clockwise from the way it is heading now.
+- **Right** turns it 90° clockwise.
+- Turns are relative to the snake, not the screen: a snake moving down that gets **Left** turns to screen-right.
+- The buttons react on touch-down (no 300 ms tap delay, no double-tap zoom, no text selection or long-press menu).
+- Each tick applies one turn, and up to two quick taps are queued. Two fast **Right** taps make a clean U-turn over two ticks, never an instant reversal into your own body.
+- Swiping and the old D-pad are gone.
+
+While a run is live on a phone, the name panel, extra buttons, and Arcade board are hidden. That leaves the score, **Pause**, the board, and the two turn buttons (at the bottom, in thumb reach) on one screen with no scrolling. **Pause** (or a game over) brings everything back. Held sideways, the buttons sit on either side of the board.
+
+### Desktop keyboard: relative turns (same as the buttons)
+
+- `←` (ArrowLeft) or `A` turns the snake 90° counter-clockwise from its current heading, just like **Left**.
+- `→` (ArrowRight) or `D` turns it 90° clockwise, just like **Right**.
+- `A` / `D` work with or without Shift or Caps Lock. Keys pressed together with Ctrl, Alt, or Cmd are left to the browser.
+- Keys use the same turn queue as the buttons: one turn per tick, at most two queued. Two fast `→` presses make a clean U-turn. Holding a key down turns once; it does not auto-repeat.
+- `↑` / `↓` and `W` / `S` do not steer. During a run the steering keys (and `↑` / `↓`) don't scroll the page.
+- Steering keys only work during a live run. They do nothing before **Start**, while paused, or after game over, and they never start a game.
+- The on-screen Left / Right buttons also work with a mouse.
+- `P` / Space: pause or resume (only during a run)
+- `M`: sound on/off
+- Keys typed into the name field (or any other input) never steer, pause, or start the game.
+
+### Layout notes
+
+- The board is always square. Its size comes from the visible viewport (`visualViewport` / `100dvh`, minus safe-area insets), and it is recomputed on resize, rotation, and when the on-screen keyboard opens or closes.
+- The canvas backing store is scaled by `devicePixelRatio` and snapped to whole device pixels per cell, so it stays sharp on high-DPI phones.
+- Pull-to-refresh and overscroll bounce are turned off.
 
 ## Files
 
 - `index.html` - page shell + Arcade board panel
 - `styles.css` - layout and theme
 - `favicon.svg` - cute snake favicon
-- `game.js` - game loop, input, start-gate, leaderboard UI
+- `game.js` - game loop, input (Left/Right turn buttons + keyboard), responsive canvas sizing, start-gate, leaderboard UI
 - `settings.js` - localStorage + server settings helpers
 - `server.js` - Express static host + settings/players API + `/api/health`
 - `data/settings.json` - revisioned per-player settings map (created at runtime; gitignored)
@@ -75,7 +100,7 @@ Store shape:
 }
 ```
 
-Writes use a `.lock` file (`wx` + retries/backoff/jitter) and bump `revision` each successful write. The HTTP server binds `127.0.0.1` only.
+Writes use a `.lock` file (`wx` + retries/backoff/jitter) and bump `revision` each successful write. The HTTP server binds `localhost` only.
 
 Names are filtered client- and server-side (base64 blocked list) for a professional portfolio.
 
@@ -86,7 +111,7 @@ Production target:
 - Public URL: `https://snakearcade.socha3.com`
 - App folder: `C:\WebApps\SnakeArcade`
 - Node service: Windows service `SnakeArcadeNode` (WinSW), auto-start
-- Node listens on `127.0.0.1:3105` (`PORT=3105` set by the service)
+- Node listens on `localhost:3105` (`PORT=3105` set by the service)
 - IIS site `SnakeArcade` reverse-proxies to that port via URL Rewrite + ARR (`web.config`)
 
 ### Before first public deploy
@@ -97,8 +122,8 @@ Fix these in the app (not optional for a public site):
 2. Bind the HTTP server to loopback only, since IIS owns the public ports:
 
 ```js
-app.listen(PORT, "127.0.0.1", () => {
-  console.log(`SnakeArcade listening on http://127.0.0.1:${PORT}`);
+app.listen(PORT, "localhost", () => {
+  console.log(`SnakeArcade listening on http://localhost:${PORT}`);
 });
 ```
 
@@ -113,14 +138,14 @@ cd C:\WebApps\SnakeArcade
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\post-deploy.ps1
 ```
 
-That script installs npm deps (`npm ci` / `npm install --omit=dev`), ensures `data\` and `web.config` (creates `web.config` only if missing), restarts `SnakeArcadeNode`, and smoke-tests `http://127.0.0.1:3105/`.
+That script installs npm deps (`npm ci` / `npm install --omit=dev`), ensures `data\` and `web.config` (creates `web.config` only if missing), restarts `SnakeArcadeNode`, and smoke-tests `http://localhost:3105/`.
 
 Optional: `-SkipNpm`, `-AppRoot C:\WebApps\SnakeArcade`, `-Port 3105`.
 
 ### Deploy steps
 
 1. Copy app files into `C:\WebApps\SnakeArcade` (or sync from this repo).
-2. **Keep** the server `web.config` that rewrites to `http://127.0.0.1:3105/{R:1}`. Do not overwrite it with an empty/missing file from git if the repo has no `web.config`.
+2. **Keep** the server `web.config` that rewrites to `http://localhost:3105/{R:1}`. Do not overwrite it with an empty/missing file from git if the repo has no `web.config`.
 3. On the server, in the app folder:
 
 ```powershell
@@ -138,7 +163,7 @@ Restart-Service SnakeArcadeNode
 
 6. Smoke-test:
 
-- Direct: `http://127.0.0.1:3105/` and `/api/settings?player=` / `/api/players`
+- Direct: `http://localhost:3105/` and `/api/settings?player=` / `/api/players`
 - Via IIS/Cloudflare: `https://snakearcade.socha3.com/` and `/api/players`
 
 ### Do not delete

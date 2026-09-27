@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#101418">
   <title>SnakeArcade</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
@@ -34,14 +34,16 @@
       </div>
 
       <div class="player-panel">
-        <label class="player-name" for="player-name">
-          <span>Player name</span>
-          <input id="player-name" type="text" maxlength="24" autocomplete="nickname" placeholder="Your name (PG, 2+ chars)" spellcheck="false">
-        </label>
-        <p class="name-hint" id="name-hint">Pick a PG name, tap Save name, then Start. Guest / empty names can’t play.</p>
-        <div class="settings-actions">
-          <button id="save-settings" type="button">Save name</button>
+        <div class="player-row">
+          <label class="player-name" for="player-name">
+            <span>Player name</span>
+            <input id="player-name" type="text" maxlength="24" autocomplete="nickname" placeholder="Your name (PG, 2+ chars)" spellcheck="false">
+          </label>
+          <div class="settings-actions">
+            <button id="save-settings" type="button">Save name</button>
+          </div>
         </div>
+        <p class="name-hint" id="name-hint">Pick a PG name, tap Save name, then Start. Guest / empty names can’t play.</p>
       </div>
 
       <div class="toolbar">
@@ -62,18 +64,30 @@
       </div>
 
       <p class="help" id="help">
-        Move: arrows / WASD / swipe / pad · Pause: <kbd>P</kbd> / Space · Sound: <kbd>M</kbd> · Start: after Save name
+        Turn: on-screen Left / Right, or <kbd>←</kbd> / <kbd>→</kbd> or <kbd>A</kbd> / <kbd>D</kbd> (relative to the snake) · Pause: <kbd>P</kbd> / Space · Sound: <kbd>M</kbd> · Start: after Save name
       </p>
       <div id="status" class="sr-only" aria-live="polite"></div>
 
       <div class="play-layout">
-        <div class="canvas-wrap">
-          <canvas id="game" width="640" height="640" tabindex="0" aria-label="Snake play field"></canvas>
-          <div id="overlay" class="overlay">
-            <h2>Save a name</h2>
-            <p>Pick a PG name (2+ characters), tap Save name, then Start.</p>
-            <button id="overlay-start" type="button">Start game</button>
+        <div class="stage" id="stage">
+          <div class="arena-slot" id="arena-slot">
+            <div class="canvas-wrap" id="canvas-wrap">
+              <canvas id="game" width="640" height="640" tabindex="0" aria-label="Snake play field"></canvas>
+              <div id="overlay" class="overlay">
+                <h2>Save a name</h2>
+                <p>Pick a PG name (2+ characters), tap Save name, then Start.</p>
+                <button id="overlay-start" type="button">Start game</button>
+              </div>
+            </div>
           </div>
+          <button class="turn-btn turn-left" id="turn-left" type="button" tabindex="-1" data-turn="left" aria-label="Turn left">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 20v-6a5 5 0 0 0-5-5H5"/><path d="M9 4 4 9l5 5"/></svg>
+            <span class="turn-label">Left</span>
+          </button>
+          <button class="turn-btn turn-right" id="turn-right" type="button" tabindex="-1" data-turn="right" aria-label="Turn right">
+            <span class="turn-label">Right</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 20v-6a5 5 0 0 1 5-5h8"/><path d="m15 4 5 5-5 5"/></svg>
+          </button>
         </div>
 
         <aside id="arcade-board" class="arcade-board" aria-label="Arcade leaderboard">
@@ -84,15 +98,6 @@
           <ol id="arcade-board-list" class="board-list"></ol>
           <p class="board-foot">Scores sync from the server JSON. Crown goes to the hungriest snake.</p>
         </aside>
-      </div>
-
-      <div class="dpad" aria-label="Direction pad">
-        <button type="button" data-dir="up" aria-label="Up">↑</button>
-        <div class="dpad-mid">
-          <button type="button" data-dir="left" aria-label="Left">←</button>
-          <button type="button" data-dir="right" aria-label="Right">→</button>
-        </div>
-        <button type="button" data-dir="down" aria-label="Down">↓</button>
       </div>
     </section>
   </main>
