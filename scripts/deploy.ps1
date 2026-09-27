@@ -17,7 +17,7 @@
        plus anything passed in -ExtraExcludeDirs / -ExtraExcludeFiles.
     5. Verify data\settings.json is byte-identical (restore from backup if not).
     6. Start the service.
-    7. Poll http://localhost:<Port>/api/health until it answers ok=true,
+    7. Poll http://127.0.0.1:<Port>/api/health (the same IPv4 address IIS proxies to) until it answers ok=true,
        then (optionally) the public URL.
 
   Robocopy exit codes 0-7 are success; 8 or higher is a failure.
@@ -280,7 +280,7 @@ try {
 
   # ------------------------------------------------------------------ health
   Write-Step "Health check (local)"
-  $localHealth = "http://localhost:$Port/api/health"
+  $localHealth = "http://127.0.0.1:$Port/api/health"
   if (-not (Test-HealthUrl -Url $localHealth -Retries $HealthRetries -DelaySeconds $HealthDelaySeconds -ExpectedPort $Port)) {
     throw "Local health check failed: $localHealth did not return ok=true after $HealthRetries tries."
   }

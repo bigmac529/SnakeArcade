@@ -82,5 +82,6 @@ jobs:
             -ServiceName "$env:SERVICE_NAME" `
             -Port ([int]$env:APP_PORT) `
             -PublicUrl "$env:PUBLIC_URL" `
-            -BackupRoot "$env:BACKUP_ROOT"
+            -BackupRoot "$env:BACKUP_ROOT" `
+            -RequirePublicHealthy
           if ($LASTEXITCODE -ne 0) { throw "deploy.ps1 failed with exit code $LASTEXITCODE" }

@@ -362,6 +362,6 @@ app.use(express.static(ROOT));
 
 ensureDataStore();
 
-app.listen(PORT, "localhost", () => {
-  console.log(`SnakeArcade listening on http://localhost:${PORT}`);
+app.listen(PORT, "127.0.0.1", () => {
+  console.log(`SnakeArcade listening on http://127.0.0.1:${PORT}`);
 });

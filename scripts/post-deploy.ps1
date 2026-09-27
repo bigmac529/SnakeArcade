@@ -132,7 +132,7 @@ if (-not (Test-Path -LiteralPath $webConfigPath)) {
 
           <match url="(.*)" />
 
-          <action type="Rewrite" url="http://localhost:$Port/{R:1}" />
+          <action type="Rewrite" url="http://127.0.0.1:$Port/{R:1}" />
 
         </rule>
 
@@ -150,7 +150,7 @@ if (-not (Test-Path -LiteralPath $webConfigPath)) {
 
 "@ | Set-Content -LiteralPath $webConfigPath -Encoding UTF8
 
-  Write-Host "Wrote new web.config -> localhost:$Port"
+  Write-Host "Wrote new web.config -> 127.0.0.1:$Port"
 
 } else {
 
@@ -238,14 +238,14 @@ Write-Host "Service status: $($svc.Status)"
 
 
 
-Write-Step "Smoke test Node on localhost:$Port"
+Write-Step "Smoke test Node on 127.0.0.1:$Port"
 if (-not (Test-Path -LiteralPath $node)) {
   throw "node.exe not found at $node"
 }
 
-$healthUrl = "http://localhost:$Port/api/health"
-$homeUrl = "http://localhost:$Port/"
-$settingsUrl = "http://localhost:$Port/api/settings?player="
+$healthUrl = "http://127.0.0.1:$Port/api/health"
+$homeUrl = "http://127.0.0.1:$Port/"
+$settingsUrl = "http://127.0.0.1:$Port/api/settings?player="
 try {
   $health = Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 15
   Write-Host ("GET /api/health -> {0} {1}" -f [int]$health.StatusCode, $health.Content)
