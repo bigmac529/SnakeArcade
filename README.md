@@ -92,7 +92,21 @@ While a run is live on a phone, the name panel, extra buttons, and Arcade board 
 - The on-screen Left / Right buttons also work with a mouse.
 - `P` / Space: pause or resume (only during a run)
 - `M`: sound on/off
+- `F`: full screen on/off (`Esc` also exits)
 - Keys typed into the name field (or any other input) never steer, pause, or start the game.
+
+### Full screen
+
+The **Full screen** button (corner-arrows icon) in the toolbar, or `F` on a keyboard, switches to a view with only the current score, the board and the **Left** / **Right** buttons. The buttons show on desktop too; the keyboard still steers. `F` does nothing while you're typing in the name box. On phones the button sits next to **Settings** and, like Settings, is hidden while a run is live: use it before **Start**, while paused, or after a game.
+
+- **Layout:** held upright, the score is at the top left, the board is full width and sits right above the two turn buttons, and any spare height goes above the board. Held sideways (and on desktop), the board takes the middle and the buttons fill each side, with the score above **Left**.
+- **Controls inside full screen:** the board's overlay button reads **Start game**, **Resume** or **Play again** (after a game over, the overlay shows the score). A small **Pause** / **Resume** icon button and an **Exit full screen** icon button sit in the top right corner. `P` / Space still pause. Without a saved name, the overlay button reads **Exit full screen**, because the name box is outside the full screen view.
+- **Ways out:** the exit button, `Esc`, `F`, or leaving the browser's full screen any other way (for example a swipe or the browser's own control). All of them restore the normal page. Leaving mid-run pauses the game.
+- **How:** the real Fullscreen API (`requestFullscreen`, or `webkitRequestFullscreen` on Safari) on the game area. Where that API is missing or refused (iPhone Safari has no element full screen), an "immersive" mode pins the game area over the whole viewport instead and hides the rest of the page. Everything else works the same in that mode.
+- **Board size:** in full screen the board uses all the space it has, with no 640 px cap. With no run in progress, the grid is recomputed for the full screen shape. Entering or rotating mid-run keeps the run's columns and only rescales the cells to fit, and the next game uses the full screen size. Cells stay square and whole device pixels, so the board stays sharp.
+- Scores from full screen are saved exactly like any other game.
+
+Hiding the tab (switching apps, locking the phone) pauses a live run, in or out of full screen.
 
 ### Layout notes
 
