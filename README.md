@@ -60,6 +60,10 @@ While a run is live on a phone, the name panel, extra buttons, and Arcade board 
 - `settings.js` - localStorage + server settings helpers
 - `server.js` - Express static host + settings/players API + `/api/health`
 - `data/settings.json` - revisioned per-player settings map (created at runtime; gitignored)
+- `scripts/post-deploy.ps1` - manual post-copy setup on the server (npm, data/, web.config, restart, smoke test)
+- `scripts/deploy.ps1` - automated deploy used by GitHub Actions (stop service, robocopy mirror, start, health check)
+- `scripts/install-runner.md` - one-time self-hosted runner setup + security notes
+- `.github/workflows/deploy.yml` - deploy on push to `main` / manual run
 
 ## Player settings & Arcade board
 
@@ -128,6 +132,21 @@ app.listen(PORT, "localhost", () => {
 ```
 
 `process.env.PORT` is already respected (local default `3023`; production service uses `3105`).
+
+### Automatic deploy on merge to `main` (GitHub Actions)
+
+`.github/workflows/deploy.yml` deploys every push to `main` (plus manual **Actions > Deploy > Run workflow**) on a self-hosted runner that lives on the server (labels `self-hosted, windows, snakearcade`), so the server needs no inbound access. Deploys never overlap (`concurrency`).
+
+Steps: checkout, use the Node.js already installed on the server, `npm ci --omit=dev` (or `npm install --omit=dev` without a lockfile), then `scripts/deploy.ps1` (Windows PowerShell 5.1):
+
+1. Stops `SnakeArcadeNode`.
+2. Backs up `data\settings.json` to `C:\WebApps\SnakeArcade-backups`.
+3. Mirrors the checkout into `C:\WebApps\SnakeArcade` with `robocopy /MIR`, excluding `data\`, `.git\`, `.github\`, `logs\`, `web.config`, `*.log` and the WinSW files (robocopy exit codes 0-7 = success, 8+ = failure), then verifies `settings.json` is unchanged.
+4. Starts the service and polls `http://localhost:3105/api/health` until `ok: true` (the job fails otherwise), then checks the public URL (warning only).
+
+Paths, service name and port are parameters at the top of `scripts/deploy.ps1` and in the workflow `env:`. Preview a deploy without changing anything: `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\deploy.ps1 -DryRun`.
+
+One-time runner setup and the security rules for a self-hosted runner on a public repo: [`scripts/install-runner.md`](scripts/install-runner.md). The workflow must never run on `pull_request` from forks; keep "Require approval for all external contributors" enabled for fork PR workflows.
 
 ### Post-deploy script
 

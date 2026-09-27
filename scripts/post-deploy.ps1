@@ -253,8 +253,8 @@ try {
   throw "Smoke test failed for ${healthUrl}: $($_.Exception.Message)"
 }
 try {
-  $home = Invoke-WebRequest -Uri $homeUrl -UseBasicParsing -TimeoutSec 15
-  Write-Host ("GET / -> {0}" -f [int]$home.StatusCode)
+  $homePage = Invoke-WebRequest -Uri $homeUrl -UseBasicParsing -TimeoutSec 15
+  Write-Host ("GET / -> {0}" -f [int]$homePage.StatusCode)
 } catch {
   throw "Smoke test failed for ${homeUrl}: $($_.Exception.Message)"
 }
