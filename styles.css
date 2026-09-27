@@ -112,6 +112,15 @@ p {
   grid-template-columns: repeat(2, minmax(70px, 1fr));
 }
 
+.top-links {
+  align-items: center;
+  align-self: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
 .developer-link {
   align-items: center;
   align-self: center;
@@ -638,6 +647,10 @@ button:disabled,
     font-size: 1.3rem;
   }
 
+  .top-links {
+    gap: 6px;
+  }
+
   .developer-link {
     align-self: center;
     font-size: 0.8rem;
@@ -710,7 +723,7 @@ button:disabled,
      Pause brings everything back. */
   .is-playing .player-panel,
   .is-playing .arcade-board,
-  .is-playing .developer-link,
+  .is-playing .top-links,
   .is-playing #start,
   .is-playing #restart,
   .is-playing #mute,
