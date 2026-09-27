@@ -93,7 +93,11 @@ function Start-AppService([string]$Name, [int]$TimeoutSeconds) {
 function Test-HealthUrl([string]$Url, [int]$Retries, [int]$DelaySeconds, [int]$ExpectedPort) {
   for ($i = 1; $i -le $Retries; $i++) {
     try {
-      $resp = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 10 `
+      # Cache-busting query: IIS ARR caches /api/health briefly and ignores the
+      # request Cache-Control header, so a stale 200 could mask a 502.
+      $sep = if ($Url.Contains("?")) { "&" } else { "?" }
+      $probe = "$Url${sep}nocache=$([DateTime]::UtcNow.Ticks)"
+      $resp = Invoke-WebRequest -Uri $probe -UseBasicParsing -TimeoutSec 10 `
         -Headers @{ "Cache-Control" = "no-cache" }
       $body = $resp.Content | ConvertFrom-Json
       if ([int]$resp.StatusCode -eq 200 -and $body.ok -eq $true) {
