@@ -37,9 +37,9 @@
   // Fixed tick interval (ms per block) and points per food dot. The speed never
   // changes during a run: no ramp-up with time or score.
   const DIFFICULTIES = {
-    easy: { label: "Easy", tickMs: 1000, points: 5 },
-    normal: { label: "Normal", tickMs: 500, points: 10 },
-    hard: { label: "Hard", tickMs: 250, points: 20 }
+    easy: { label: "Easy", tickMs: 256, points: 5 },
+    normal: { label: "Normal", tickMs: 128, points: 10 },
+    hard: { label: "Hard", tickMs: 64, points: 20 }
   };
   const normalizeDifficulty = window.SnakeSettings.normalizeDifficulty;
 
