@@ -202,13 +202,18 @@
     const payload = {
       playerName: nameCheck.name,
       muted: Boolean(settings.muted),
-      difficulty: normalizeDifficulty(settings.difficulty),
-      best: Number(settings.best || 0)
+      difficulty: normalizeDifficulty(settings.difficulty)
     };
-    // Difficulty the best score was set on (shown on the arcade board).
-    const bestDifficulty = normalizeBestDifficulty(settings.bestDifficulty);
-    if (bestDifficulty) {
-      payload.bestDifficulty = bestDifficulty;
+    // Background syncs (mute / difficulty) leave the best score alone: scores
+    // only go up through submitScore, so a stale local best can never
+    // overwrite a newer one on the server.
+    if (!options.omitBest) {
+      payload.best = Number(settings.best || 0);
+      // Difficulty the best score was set on (shown on the arcade board).
+      const bestDifficulty = normalizeBestDifficulty(settings.bestDifficulty);
+      if (bestDifficulty) {
+        payload.bestDifficulty = bestDifficulty;
+      }
     }
     if (options.force) {
       payload.force = true;
@@ -261,29 +266,102 @@
     };
   }
 
+  // API GETs must never come from a cache: the live IIS/ARR proxy kept
+  // identical GETs for about a minute, so after a game over the board could
+  // show a copy from before the run. The server now sends no-store; the
+  // unique query string makes sure of it for any proxy in between.
+  let freshSeq = 0;
+  function freshUrl(path) {
+    const sep = path.includes("?") ? "&" : "?";
+    freshSeq += 1;
+    return `${path}${sep}_=${Date.now().toString(36)}.${freshSeq}`;
+  }
+
   async function fetchPlayers() {
     try {
-      const response = await fetch("/api/players");
+      const response = await fetch(freshUrl("/api/players"), { cache: "no-store" });
       if (!response.ok) {
-        return { revision: knownRevision, players: [] };
+        return {
+          ok: false,
+          revision: knownRevision,
+          players: [],
+          message: `The arcade board did not load (HTTP ${response.status}).`
+        };
       }
       const data = await response.json();
       if (data && data.revision != null) {
         knownRevision = data.revision;
       }
       return {
+        ok: true,
         revision: data.revision,
         players: Array.isArray(data.players) ? data.players : []
       };
     } catch (_) {
-      return { revision: knownRevision, players: [] };
+      return {
+        ok: false,
+        revision: knownRevision,
+        players: [],
+        message: "The arcade board did not load (network error)."
+      };
     }
+  }
+
+  /**
+   * Record a run's score for a player. The server keeps the higher of this
+   * and the stored best (order-independent, repeat-safe) and answers with
+   * the player's record and the whole board.
+   * Resolves { ok, improved, player, players, revision } or
+   * { ok: false, status, error, message, retryable }. Never throws.
+   */
+  async function submitScore(playerName, score, difficulty) {
+    const nameCheck = validatePlayerName(playerName);
+    if (!nameCheck.ok) {
+      return { ok: false, status: 400, error: "playerName_rejected", message: nameCheck.message, retryable: false };
+    }
+    let response;
+    let data;
+    try {
+      response = await fetch("/api/score", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({
+          playerName: nameCheck.name,
+          score: Math.max(0, Math.floor(Number(score) || 0)),
+          difficulty: normalizeDifficulty(difficulty)
+        })
+      });
+      data = await parseJsonResponse(response);
+    } catch (_) {
+      return { ok: false, status: 0, error: "network", message: "Network error.", retryable: true };
+    }
+    if (!response.ok || !data || data.ok !== true) {
+      return {
+        ok: false,
+        status: response.status,
+        error: (data && data.error) || "save_failed",
+        message: (data && data.message) || `Server error (HTTP ${response.status}).`,
+        // 4xx other than 408/429 won't succeed on a retry.
+        retryable: response.status >= 500 || response.status === 408 || response.status === 429
+      };
+    }
+    if (data.revision != null && (knownRevision == null || data.revision > knownRevision)) {
+      knownRevision = data.revision;
+    }
+    return {
+      ok: true,
+      improved: Boolean(data.improved),
+      player: data.player || null,
+      players: Array.isArray(data.players) ? data.players : [],
+      revision: data.revision
+    };
   }
 
   async function hydrateFromServer(playerName) {
     try {
       const query = encodeURIComponent(playerName || "");
-      const response = await fetch(`/api/settings?player=${query}`);
+      const response = await fetch(freshUrl(`/api/settings?player=${query}`), { cache: "no-store" });
       if (!response.ok) {
         return loadSettings();
       }
@@ -342,6 +420,7 @@
     normalizeDifficulty,
     hydrateFromServer,
     saveToServer,
+    submitScore,
     fetchPlayers,
     getKnownRevision,
     setKnownRevision

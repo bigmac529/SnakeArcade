@@ -17,6 +17,9 @@
   const boardEl = document.querySelector("#arcade-board");
   const boardListEl = document.querySelector("#arcade-board-list");
   const boardMetaEl = document.querySelector("#arcade-board-meta");
+  const boardStatusEl = document.querySelector("#arcade-board-status");
+  const boardStatusTextEl = document.querySelector("#arcade-board-status-text");
+  const boardRetryBtn = document.querySelector("#arcade-board-retry");
   const stageEl = document.querySelector("#stage");
   const arenaSlot = document.querySelector("#arena-slot");
   const canvasWrap = document.querySelector("#canvas-wrap");
@@ -68,6 +71,17 @@
   let nameSavedThisSession = false;
   let savedNameSnapshot = "";
   let saveInFlight = false;
+  // Arcade board: every render (GET or the answer to a score save) takes a
+  // number; a GET whose answer arrives after a newer render is dropped, so a
+  // slow or stale response can never replace a newer board.
+  let boardSeq = 0;
+  let boardLoaded = false;
+  let boardStatusKind = "";
+  // Score save queue (see queueScore).
+  const SCORE_RETRY_MS = [400, 1200, 3000];
+  let scoreQueue = [];
+  let scorePump = null;
+  let unsavedScore = null;
 
   let snake;
   let food;
@@ -873,6 +887,7 @@
     try {
       const result = await window.SnakeSettings.saveToServer(draft, {
         force,
+        omitBest: true,
         baseRevision: window.SnakeSettings.getKnownRevision()
       });
       if (result.ok) {
@@ -883,9 +898,10 @@
       } else if (!quiet) {
         announce(result.message || "Could not sync score.");
       } else if (result.error === "revision_conflict" || result.error === "lock_busy") {
-        // Soft retry once for background score sync.
+        // Soft retry once for background settings sync (mute / difficulty).
         const retry = await window.SnakeSettings.saveToServer(draft, {
           force: true,
+          omitBest: true,
           baseRevision: result.revision != null
             ? result.revision
             : window.SnakeSettings.getKnownRevision()
@@ -939,7 +955,33 @@
     if (!boardListEl) {
       return;
     }
-    const { revision, players } = await window.SnakeSettings.fetchPlayers();
+    const seq = ++boardSeq;
+    const result = await window.SnakeSettings.fetchPlayers();
+    if (seq !== boardSeq) {
+      return;
+    }
+    if (!result.ok) {
+      if (!boardLoaded) {
+        boardListEl.innerHTML = "";
+        const failed = document.createElement("li");
+        failed.className = "board-empty";
+        failed.textContent = "Couldn’t load the arcade board.";
+        boardListEl.appendChild(failed);
+      }
+      setBoardStatus(`${result.message} Showing the last board loaded.`, "error", { kind: "load" });
+      return;
+    }
+    if (boardStatusKind === "load") {
+      setBoardStatus("");
+    }
+    renderBoard(result.players, result.revision);
+  }
+
+  function renderBoard(players, revision) {
+    if (!boardListEl) {
+      return;
+    }
+    boardLoaded = true;
     boardListEl.innerHTML = "";
     if (!players.length) {
       const empty = document.createElement("li");
@@ -985,6 +1027,138 @@
     if (boardEl) {
       boardEl.dataset.count = String(players.length);
     }
+  }
+
+  // Board status line: score save results and errors (never silent).
+  function setBoardStatus(text, tone = "", { kind = "", retry = false } = {}) {
+    boardStatusKind = text ? kind || tone : "";
+    if (!boardStatusEl) {
+      return;
+    }
+    boardStatusEl.hidden = !text;
+    boardStatusEl.dataset.tone = tone;
+    if (boardStatusTextEl) {
+      boardStatusTextEl.textContent = text;
+    }
+    if (boardRetryBtn) {
+      boardRetryBtn.hidden = !retry;
+    }
+  }
+
+  // ---- Score saving. New bests during a run and every game over / End game
+  // go through this queue: one request at a time, only the highest waiting
+  // score per player is sent (the server keeps the max, so order never
+  // matters), transient failures retry with backoff, and the board is
+  // rendered from the server's answer to the save itself. A save that still
+  // fails is shown on the board with a Retry button.
+
+  function queueScore(value, difficulty, { final = false } = {}) {
+    const name = savedNameSnapshot;
+    if (!name) {
+      return Promise.resolve();
+    }
+    const item = scoreQueue.find((q) => q.name === name);
+    if (item) {
+      if (value > item.score) {
+        item.score = value;
+        item.difficulty = difficulty;
+      }
+      if (final) {
+        item.final = true;
+        item.runScore = value;
+      }
+    } else {
+      scoreQueue.push({ name, score: value, difficulty, final, runScore: final ? value : null });
+    }
+    // A score that failed to save earlier rides along (the max is kept).
+    if (final && unsavedScore && unsavedScore.name === name) {
+      const q = scoreQueue.find((x) => x.name === name);
+      if (unsavedScore.score > q.score) {
+        q.score = unsavedScore.score;
+        q.difficulty = unsavedScore.difficulty;
+      }
+    }
+    if (final) {
+      setBoardStatus("Saving your score…", "pending");
+    }
+    if (!scorePump) {
+      scorePump = (async () => {
+        while (scoreQueue.length) {
+          await sendScore(scoreQueue.shift());
+        }
+        scorePump = null;
+      })();
+    }
+    return scorePump;
+  }
+
+  async function sendScore(item) {
+    let result;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        result = await window.SnakeSettings.submitScore(item.name, item.score, item.difficulty);
+      } catch (err) {
+        result = { ok: false, retryable: true, message: String(err && err.message) };
+      }
+      if (result.ok || !result.retryable || attempt >= SCORE_RETRY_MS.length) {
+        break;
+      }
+      await new Promise((r) => setTimeout(r, SCORE_RETRY_MS[attempt]));
+    }
+
+    if (!result.ok) {
+      if (!unsavedScore || unsavedScore.name !== item.name || item.score > unsavedScore.score) {
+        unsavedScore = { name: item.name, score: item.score, difficulty: item.difficulty };
+      }
+      const msg = `Couldn’t save your score of ${unsavedScore.score} to the arcade board: ${result.message || "unknown error"}`;
+      setBoardStatus(msg, "error", { kind: "save", retry: true });
+      announce(msg);
+      if (boardEl) {
+        boardEl.dataset.saveState = "error";
+      }
+      return;
+    }
+
+    const serverBest = Number((result.player && result.player.best) || 0);
+    if (unsavedScore && unsavedScore.name === item.name && unsavedScore.score <= serverBest) {
+      unsavedScore = null;
+    }
+    // The server is the source of truth for the best on the board; pick up a
+    // higher one (e.g. set on another device).
+    if (item.name === savedNameSnapshot && serverBest > best) {
+      best = serverBest;
+      bestEl.textContent = best;
+      persistSettingsLocal({ best, bestDifficulty: result.player.bestDifficulty });
+    }
+    boardSeq += 1;
+    renderBoard(result.players, result.revision);
+    if (boardEl) {
+      boardEl.dataset.saveState = unsavedScore ? "error" : "saved";
+      boardEl.dataset.savedBest = String(serverBest);
+    }
+    if (item.final) {
+      const run = item.runScore != null ? item.runScore : item.score;
+      setBoardStatus(
+        run > 0 && run >= serverBest
+          ? `Saved: ${run} is your best on the arcade board.`
+          : `Score ${run}. The board keeps your best: ${serverBest}.`,
+        "ok",
+        { kind: "save" }
+      );
+    } else if (!unsavedScore && boardStatusKind === "save") {
+      setBoardStatus("");
+    }
+  }
+
+  if (boardRetryBtn) {
+    boardRetryBtn.addEventListener("click", () => {
+      if (unsavedScore && unsavedScore.name === savedNameSnapshot) {
+        queueScore(unsavedScore.score, unsavedScore.difficulty, { final: true });
+      } else {
+        setBoardStatus("");
+        refreshArcadeBoard();
+      }
+    });
   }
 
   function reset() {
@@ -1149,7 +1323,9 @@
       bestEl.textContent = best;
       bestEl.classList.add("best-flash");
       persistSettingsLocal({ best, bestDifficulty: runDifficulty });
-      pushServerState({ force: true, quiet: true });
+      // Save the new best right away (so it counts even if the tab is closed
+      // mid-run); the queue sends only the latest if several are waiting.
+      queueScore(score, runDifficulty);
       if (!beatBestThisRun) {
         beatBestThisRun = true;
         beep(880, 0.08, "sine", 0.04);
@@ -1199,8 +1375,9 @@
     canvas.dataset.retroTurns = String(Number(canvas.dataset.retroTurns || 0) + 1);
   }
 
-  // Game over (crash) or End game. Either way the score already counted:
-  // a new best is saved the moment it is reached during the run.
+  // Game over (crash) or End game. Either way the run's score is sent to the
+  // server (which keeps the player's best) and the board is re-rendered from
+  // the server's answer once that save has completed.
   function finish({ ended = false } = {}) {
     grace = null;
     lastTickTurned = false;
@@ -1220,10 +1397,10 @@
     setOverlay(ended ? "Game ended" : "Game Over", detail);
     if (beatBestThisRun) {
       overlay.querySelector("p").classList.add("new-best");
-      refreshArcadeBoard();
     } else {
       overlay.querySelector("p").classList.remove("new-best");
     }
+    queueScore(score, runDifficulty, { final: true });
   }
 
   function draw() {

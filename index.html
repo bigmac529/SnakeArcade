@@ -101,6 +101,10 @@
             <h2><span aria-hidden="true">🐍</span> Arcade board</h2>
             <p id="arcade-board-meta" class="board-meta"></p>
           </div>
+          <div id="arcade-board-status" class="board-status" role="status" aria-live="polite" hidden>
+            <span id="arcade-board-status-text"></span>
+            <button id="arcade-board-retry" class="board-retry" type="button" hidden>Retry</button>
+          </div>
           <ol id="arcade-board-list" class="board-list"></ol>
           <p class="board-foot">Scores sync from the server JSON. Crown goes to the hungriest snake.</p>
         </aside>

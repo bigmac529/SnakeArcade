@@ -106,6 +106,27 @@ function readStoreUnlocked() {
   }
 }
 
+// Read for a write (inside the lock). Unlike readStoreUnlocked this never
+// falls back to an empty store: writing that back would wipe the whole board,
+// so an unreadable file fails the request instead.
+function readStoreForWrite() {
+  ensureDataStore();
+  let raw;
+  try {
+    raw = fs.readFileSync(SETTINGS_FILE, "utf8");
+  } catch (err) {
+    if (err && err.code === "ENOENT") {
+      return { revision: 0, players: {} };
+    }
+    throw err;
+  }
+  const parsed = JSON.parse(raw);
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("settings_unreadable");
+  }
+  return normalizeStore(parsed);
+}
+
 function atomicWriteJson(filePath, data) {
   const dir = path.dirname(filePath);
   if (!fs.existsSync(dir)) {
@@ -117,13 +138,24 @@ function atomicWriteJson(filePath, data) {
     `.settings-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`
   );
   fs.writeFileSync(tmp, payload, "utf8");
-  try {
-    fs.renameSync(tmp, filePath);
-  } catch (err) {
-    // Windows cannot always rename over an existing file.
-    fs.copyFileSync(tmp, filePath);
-    fs.unlinkSync(tmp);
+  // Windows can briefly refuse to rename over a file another process (virus
+  // scanner, indexer, backup) has open: retry a few times before falling
+  // back to copying over it.
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      fs.renameSync(tmp, filePath);
+      return;
+    } catch (err) {
+      const transient = err && ["EPERM", "EBUSY", "EACCES"].includes(err.code);
+      if (transient && attempt < 4) {
+        sleepSync(15 * (attempt + 1));
+        continue;
+      }
+      break;
+    }
   }
+  fs.copyFileSync(tmp, filePath);
+  fs.unlinkSync(tmp);
 }
 
 function withStoreLock(fn) {
@@ -245,6 +277,13 @@ function playersList(store) {
     .sort((a, b) => b.best - a.best || String(a.playerName).localeCompare(String(b.playerName)));
 }
 
+// API responses are live data: never let a browser, IIS/ARR or Cloudflare
+// serve a stale leaderboard.
+app.use("/api", (_req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  next();
+});
+
 app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
@@ -302,7 +341,7 @@ app.put("/api/settings", (req, res) => {
 
   try {
     const result = withStoreLock(() => {
-      const store = readStoreUnlocked();
+      const store = readStoreForWrite();
 
       if (
         baseRevision != null &&
@@ -402,6 +441,99 @@ app.put("/api/settings", (req, res) => {
     return res.status(500).json({
       error: "write_failed",
       message: String(err && err.message)
+    });
+  }
+});
+
+// Record a finished (or in-progress) run's score. The server keeps the higher
+// of the stored best and this score, so submissions can arrive in any order,
+// overlap, or repeat without ever lowering a best, and they need no revision
+// token (another player's save can't make a score submission fail). Responds
+// with the player's record and the full board, so the client can render the
+// board straight from the result of its own save.
+const MAX_SCORE = 10000000;
+
+app.post("/api/score", (req, res) => {
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  const nameCheck = validatePlayerName(body.playerName != null ? body.playerName : "");
+  if (!nameCheck.ok) {
+    return res.status(400).json({
+      ok: false,
+      error: "playerName_rejected",
+      message: nameCheck.message
+    });
+  }
+  const score = Number(body.score);
+  if (!Number.isInteger(score) || score < 0 || score > MAX_SCORE) {
+    return res.status(400).json({
+      ok: false,
+      error: "score_invalid",
+      message: "Score must be a whole number."
+    });
+  }
+  const difficulty = normalizeDifficulty(body.difficulty);
+  const key = normalizePlayerKey(nameCheck.name);
+
+  try {
+    const result = withStoreLock(() => {
+      const store = readStoreForWrite();
+      const previous = store.players[key];
+      const previousBest = Number((previous && previous.best) || 0);
+      const improved = score > previousBest;
+      // Normally the player already exists (Save name creates the record);
+      // if it doesn't, create it rather than drop the score.
+      if (improved || !previous) {
+        const saved = {
+          ...defaultPlayerSettings(nameCheck.name),
+          ...(previous || {}),
+          best: Math.max(score, previousBest),
+          version: 1,
+          updatedAt: new Date().toISOString()
+        };
+        if (!previous && difficulty) {
+          saved.difficulty = difficulty;
+        }
+        if (improved) {
+          if (difficulty) {
+            saved.bestDifficulty = difficulty;
+          } else {
+            delete saved.bestDifficulty;
+          }
+        }
+        delete saved._missing;
+        delete saved.revision;
+        store.players[key] = saved;
+        store.revision = Number(store.revision || 0) + 1;
+        atomicWriteJson(SETTINGS_FILE, store);
+      }
+      return {
+        improved,
+        player: store.players[key],
+        revision: store.revision,
+        players: playersList(store)
+      };
+    });
+    return res.json({
+      ok: true,
+      improved: result.improved,
+      score,
+      player: presentPlayer(result.player),
+      revision: result.revision,
+      players: result.players
+    });
+  } catch (err) {
+    if (err && err.code === "lock_busy") {
+      return res.status(503).json({
+        ok: false,
+        error: "lock_busy",
+        message: "Arcade board is busy. Try again in a moment."
+      });
+    }
+    console.error("score save failed:", err);
+    return res.status(500).json({
+      ok: false,
+      error: "write_failed",
+      message: "Could not save the score on the server."
     });
   }
 });

@@ -893,6 +893,45 @@ button:disabled,
   font-weight: 800;
 }
 
+.board-status {
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.8rem;
+  gap: 6px 10px;
+  line-height: 1.35;
+  padding: 6px 10px;
+}
+
+.board-status[hidden] {
+  display: none;
+}
+
+.board-status[data-tone="ok"] {
+  border-color: rgba(134, 214, 114, 0.45);
+  color: var(--accent);
+}
+
+.board-status[data-tone="error"] {
+  border-color: rgba(255, 107, 107, 0.6);
+  color: #ff8f8f;
+}
+
+.board-retry {
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  min-height: 28px;
+  padding: 2px 12px;
+}
+
 .board-empty {
   color: var(--muted);
   font-size: 0.9rem;

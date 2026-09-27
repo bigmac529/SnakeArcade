@@ -122,19 +122,26 @@ If the name already exists on the server, the UI asks for confirmation (shows th
 
 Changing the name input clears the session “saved” flag until you save again. Start / overlay Start stay disabled until a successful save this session.
 
-The **Arcade board** panel lists all players sorted by best score (desc), with a small tag showing the difficulty the best was set on (older entries saved before this feature have no tag). It refreshes on load, after save, and when a new best is synced.
+The **Arcade board** panel lists all players sorted by best score (desc), with a small tag showing the difficulty the best was set on (older entries saved before this feature have no tag). It shows each player's **best** score only, so a game that doesn't beat your best leaves your row unchanged.
+
+Scores are saved with `POST /api/score`: each new best during a run, and the final score at every game over / End game. The client sends one request at a time (only the highest waiting score), retries transient failures (0.4 s, 1.2 s, 3 s), and redraws the board from the save's own response, with a status line under the board header ("Saved: 120 is your best on the arcade board." / "Score 40. The board keeps your best: 120."). If a save still fails, the status line says so, with a **Retry** button; the failed score is also re-sent at the next game over. The board also refreshes on load and after Save name. API GETs use a unique query string and the server sends `Cache-Control: no-store`, because the IIS ARR proxy otherwise caches identical GETs for about a minute.
 
 ### API
 
 - `GET /api/health` → `{ ok, app, node, port, time }`
 - `GET /api/players` → `{ revision, players: [{ playerName, best, bestDifficulty?, updatedAt, key }] }` sorted by best
 - `GET /api/settings?player=` → one player record (+ `revision`)
-- `PUT /api/settings` body: `{ playerName, muted, difficulty, best, bestDifficulty?, force?, baseRevision? }`
+- `POST /api/score` body: `{ playerName, score, difficulty }` → `{ ok, improved, score, player, revision, players }`
+  - The server keeps the higher of `score` and the stored best (and tags it with `difficulty` when the score is higher), so score saves can overlap, repeat, or arrive out of order without lowering a best. No `baseRevision`: another player's save can't make a score save fail. Creates the player record if it's missing. `players` is the full board, like `GET /api/players`.
+  - `400` `{ error: "playerName_rejected" | "score_invalid" }`, `503` `{ error: "lock_busy" }`, `500` `{ error: "write_failed" }`
+- `PUT /api/settings` body: `{ playerName, muted, difficulty, best?, bestDifficulty?, force?, baseRevision? }`
   - `difficulty` / `bestDifficulty`: `easy` | `normal` | `hard`. The legacy value `fast` is still accepted and stored as `hard`. If `bestDifficulty` is omitted, the previous tag is kept unless `best` changed.
   - `400` `{ error: "playerName_rejected", message }` — PG / validation reject
   - `409` `{ error: "name_exists", existing, revision }` — name taken and `force` not set
   - `409` `{ error: "revision_conflict" | "lock_busy", revision }` — concurrency
   - `200` saved player + `revision`
+  - `best` omitted keeps the stored best. The game sends `best` only from **Save name** (a new name starts with this browser's best; claiming an existing name overwrites its best). Mute / difficulty syncs omit it.
+- All `/api` responses send `Cache-Control: no-store`.
 
 Store shape:
 
@@ -155,7 +162,7 @@ Store shape:
 }
 ```
 
-Writes use a `.lock` file (`wx` + retries/backoff/jitter) and bump `revision` each successful write. The HTTP server binds `localhost` only. On Windows with Node 17+ `localhost` may resolve to IPv6 `::1` only, so the IIS reverse proxy targets `http://localhost:3105` (not `127.0.0.1`); that works whether Node ends up on `::1` or `127.0.0.1`.
+Writes use a `.lock` file (`wx` + retries/backoff/jitter), write to a temp file and rename it over `settings.json` (retrying briefly if Windows reports the file busy), and bump `revision` each successful write. A write never proceeds from an unreadable `settings.json` (that would wipe the board); the request fails instead. The HTTP server binds `localhost` only. On Windows with Node 17+ `localhost` may resolve to IPv6 `::1` only, so the IIS reverse proxy targets `http://localhost:3105` (not `127.0.0.1`); that works whether Node ends up on `::1` or `127.0.0.1`.
 
 Names are filtered client- and server-side (base64 blocked list) for a professional portfolio.
 
