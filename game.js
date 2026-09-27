@@ -257,7 +257,8 @@
     btn.addEventListener("pointercancel", release);
     btn.addEventListener("pointerleave", release);
     // Deliberately no "click" handler: taps would then turn twice (pointerdown +
-    // click). Keyboard players steer with arrows / WASD instead.
+    // click). Keyboard players get the same relative turns from Left/Right
+    // arrows and A / D (see the keydown handler).
     btn.addEventListener("contextmenu", (event) => event.preventDefault());
   });
 
@@ -300,15 +301,28 @@
       return;
     }
 
-    const next = directionFromKey(event.key);
+    // Leave browser shortcuts (Ctrl+A, Cmd+D, Alt+Arrow, ...) alone.
+    const hasModifier = event.ctrlKey || event.metaKey || event.altKey;
+    const side = hasModifier ? null : turnFromKey(event.key);
 
-    if (next) {
+    if (side) {
+      // Keys never start a run; they only steer while one is live.
       if (!running || gameOver) {
         return;
       }
       event.preventDefault();
-      if (!paused) {
-        queueDirection(next);
+      // Holding a key must not spin the snake: one press = one turn, like
+      // one tap on an on-screen button.
+      if (!paused && !event.repeat) {
+        turn(side);
+      }
+      return;
+    }
+
+    if (!hasModifier && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+      // Up/Down no longer steer, but still must not scroll the page mid-run.
+      if (running && !gameOver) {
+        event.preventDefault();
       }
       return;
     }
@@ -397,7 +411,7 @@
         } else if (!running && !gameOver) {
           setOverlay(
             "Press Start",
-            "Tap Start to play. Then steer with the Left / Right buttons (or arrow keys / WASD)."
+            "Tap Start to play. Then steer with the Left / Right buttons (or ← / → or A / D keys)."
           );
         }
       }
@@ -604,7 +618,7 @@
     pauseBtn.textContent = "Pause";
     food = placeFood();
     if (canStart()) {
-      setOverlay("Press Start", "Tap Start to play. Then steer with the Left / Right buttons (or arrow keys / WASD).");
+      setOverlay("Press Start", "Tap Start to play. Then steer with the Left / Right buttons (or ← / → or A / D keys).");
     } else {
       setOverlay(
         "Save a name",
@@ -768,20 +782,8 @@
     return turnQueue.length ? turnQueue[turnQueue.length - 1] : direction;
   }
 
-  // Absolute direction (keyboard). Ignored if it would reverse or repeat the
-  // heading the snake will have after already-queued turns.
-  function queueDirection(next) {
-    const base = lastPlannedDirection();
-    if ((next.x === -base.x && next.y === -base.y) || (next.x === base.x && next.y === base.y)) {
-      return;
-    }
-    if (turnQueue.length >= maxQueuedTurns) {
-      return;
-    }
-    turnQueue.push(next);
-  }
-
-  // Relative turn (on-screen buttons). Left = 90deg counter-clockwise,
+  // Relative turn, shared by the on-screen buttons and the keyboard
+  // (Left/Right arrows, A / D). Left = 90deg counter-clockwise,
   // Right = 90deg clockwise, measured from the heading after queued turns.
   // Canvas y grows downward, so CCW maps (x, y) -> (y, -x).
   function turn(side) {
@@ -878,20 +880,17 @@
     }
   }
 
-  function directionFromKey(keyName) {
-    const normalized = keyName.toLowerCase();
+  // Keyboard steering is relative, exactly like the on-screen buttons:
+  // ArrowLeft / A = turn left (CCW), ArrowRight / D = turn right (CW).
+  // Up/Down and W/S intentionally do nothing.
+  function turnFromKey(keyName) {
     const map = {
-      arrowup: { x: 0, y: -1 },
-      w: { x: 0, y: -1 },
-      arrowdown: { x: 0, y: 1 },
-      s: { x: 0, y: 1 },
-      arrowleft: { x: -1, y: 0 },
-      a: { x: -1, y: 0 },
-      arrowright: { x: 1, y: 0 },
-      d: { x: 1, y: 0 }
+      arrowleft: "left",
+      a: "left",
+      arrowright: "right",
+      d: "right"
     };
-
-    return map[normalized];
+    return map[String(keyName || "").toLowerCase()] || null;
   }
 
   function setOverlay(title, message = "") {

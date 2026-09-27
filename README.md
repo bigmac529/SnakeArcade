@@ -32,13 +32,18 @@ Dev script is the same entrypoint: `npm run dev`.
 
 While a run is live on a phone, the name panel, extra buttons, and Arcade board are hidden. That leaves the score, **Pause**, the board, and the two turn buttons (at the bottom, in thumb reach) on one screen with no scrolling. **Pause** (or a game over) brings everything back. Held sideways, the buttons sit on either side of the board.
 
-### Desktop keyboard: absolute directions
+### Desktop keyboard: relative turns (same as the buttons)
 
-- Arrow keys or WASD steer in screen directions (Up = up, and so on). A key that would reverse the snake is ignored.
-- The on-screen Left / Right buttons also work with a mouse, as relative turns.
+- `←` (ArrowLeft) or `A` turns the snake 90° counter-clockwise from its current heading, just like **Left**.
+- `→` (ArrowRight) or `D` turns it 90° clockwise, just like **Right**.
+- `A` / `D` work with or without Shift or Caps Lock. Keys pressed together with Ctrl, Alt, or Cmd are left to the browser.
+- Keys use the same turn queue as the buttons: one turn per tick, at most two queued. Two fast `→` presses make a clean U-turn. Holding a key down turns once; it does not auto-repeat.
+- `↑` / `↓` and `W` / `S` do not steer. During a run the steering keys (and `↑` / `↓`) don't scroll the page.
+- Steering keys only work during a live run. They do nothing before **Start**, while paused, or after game over, and they never start a game.
+- The on-screen Left / Right buttons also work with a mouse.
 - `P` / Space: pause or resume (only during a run)
 - `M`: sound on/off
-- Keys typed into the name field never steer or start the game.
+- Keys typed into the name field (or any other input) never steer, pause, or start the game.
 
 ### Layout notes
 
