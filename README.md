@@ -19,19 +19,39 @@ Dev script is the same entrypoint: `npm run dev`.
 
 ## Controls
 
-- Arrow keys or WASD
-- Swipe on the canvas
-- On-screen D-pad (narrow screens)
-- Start / Pause–Resume / Restart (Start requires a saved PG name this session)
-- Sound toggle (`M`)
-- `P` to pause
+**Start** (or the **Start game** button on the board) is the only way to begin a run, and it needs a saved PG name this session. Taps, key presses, and the turn buttons never start a game.
+
+### Phone / touch: two buttons
+
+- **Left** turns the snake 90° counter-clockwise from the way it is heading now.
+- **Right** turns it 90° clockwise.
+- Turns are relative to the snake, not the screen: a snake moving down that gets **Left** turns to screen-right.
+- The buttons react on touch-down (no 300 ms tap delay, no double-tap zoom, no text selection or long-press menu).
+- Each tick applies one turn, and up to two quick taps are queued. Two fast **Right** taps make a clean U-turn over two ticks, never an instant reversal into your own body.
+- Swiping and the old D-pad are gone.
+
+While a run is live on a phone, the name panel, extra buttons, and Arcade board are hidden. That leaves the score, **Pause**, the board, and the two turn buttons (at the bottom, in thumb reach) on one screen with no scrolling. **Pause** (or a game over) brings everything back. Held sideways, the buttons sit on either side of the board.
+
+### Desktop keyboard: absolute directions
+
+- Arrow keys or WASD steer in screen directions (Up = up, and so on). A key that would reverse the snake is ignored.
+- The on-screen Left / Right buttons also work with a mouse, as relative turns.
+- `P` / Space: pause or resume (only during a run)
+- `M`: sound on/off
+- Keys typed into the name field never steer or start the game.
+
+### Layout notes
+
+- The board is always square. Its size comes from the visible viewport (`visualViewport` / `100dvh`, minus safe-area insets), and it is recomputed on resize, rotation, and when the on-screen keyboard opens or closes.
+- The canvas backing store is scaled by `devicePixelRatio` and snapped to whole device pixels per cell, so it stays sharp on high-DPI phones.
+- Pull-to-refresh and overscroll bounce are turned off.
 
 ## Files
 
 - `index.html` - page shell + Arcade board panel
 - `styles.css` - layout and theme
 - `favicon.svg` - cute snake favicon
-- `game.js` - game loop, input, start-gate, leaderboard UI
+- `game.js` - game loop, input (Left/Right turn buttons + keyboard), responsive canvas sizing, start-gate, leaderboard UI
 - `settings.js` - localStorage + server settings helpers
 - `server.js` - Express static host + settings/players API + `/api/health`
 - `data/settings.json` - revisioned per-player settings map (created at runtime; gitignored)
