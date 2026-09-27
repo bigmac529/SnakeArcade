@@ -34,6 +34,7 @@ New-LocalUser -Name "svc-snakearcade-deploy" -Password $pw `
   -Description "GitHub Actions runner for SnakeArcade deploys"
 ```
 
+Windows limits local account names to 20 characters, so keep the name short.
 Do **not** add it to Administrators. (On a domain you can use a gMSA
 instead; the grants below are the same.)
 
@@ -104,6 +105,7 @@ cd C:\actions-runner
   --windowslogonaccount ".\svc-snakearcade-deploy"
 ```
 
+- If the password contains cmd.exe special characters (`& | < > ^ %`), `config.cmd` breaks; run `.\bin\Runner.Listener.exe configure ...` with the same arguments instead, or use a letters-and-digits password.
 - Leave `--windowslogonpassword` off so `config.cmd` prompts for the password
   (keeps it out of shell history).
 - The runner gets `self-hosted`, `Windows`, `X64` automatically; `snakearcade`
