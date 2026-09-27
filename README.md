@@ -41,6 +41,8 @@ The **Settings** button (gear icon) in the toolbar opens a dialog with:
 
 Changes apply right away, including while paused. They are saved per browser in `localStorage` (key `snakearcade.prefs.v1`), not on the server, so they are not tied to the player name and the settings API is unchanged. The guide and marker switches only change the drawing.
 
+- **Reset best score** (button): sets the saved player's best to 0 for **that name only**. The button's hint names the player. It first asks inline, inside the dialog: "Reset your best of N to 0 for NAME? This removes NAME from the arcade board. Other names aren't affected." with **Cancel** (focused) and **Reset**; Escape backs out of the question first. On Reset, the best becomes 0 on the server (`POST /api/reset-best`), which takes the name off the board, and in every local key (`snake-arcade-settings-v1`, `classic-snake-settings-v1`, `classic-snake-best`). The board redraws and a result line appears. Scores from before the reset, still being saved or retried, are ignored, so the old best can't come back. It is disabled while a run is in progress (Settings pauses it); end the game first. With no name saved this session it only resets this browser's Best. If the server can't reset, nothing is changed and the dialog says so.
+
 The dialog is modal: focus stays inside it, and **Escape**, a click on the backdrop, or **Close** closes it. Opening Settings during play pauses the game, and closing it leaves the game paused (press Resume or P to continue). On phones the toolbar is hidden during play, so Settings is available before Start, when paused and after a game.
 
 ### Difficulty
@@ -116,25 +118,37 @@ While a run is live on a phone, the name panel, extra buttons, and Arcade board 
 
 (The turn-highlight display options in the **Settings** dialog are separate: they are saved in this browser only, see [Settings](#settings).)
 
-Enter a PG player name (2+ characters) and tap **Save name**. That writes name + mute/difficulty/best to `data/settings.json` via `PUT /api/settings`. Guest / empty names cannot start.
+Enter a PG player name (2+ characters) and tap **Save name**. That writes name + mute/difficulty to `data/settings.json` via `PUT /api/settings`, never a best score. Guest / empty names cannot start.
 
-If the name already exists on the server, the UI asks for confirmation (shows the existing best score) and only overwrites after you confirm (`force: true`).
+If the name already exists on the server, the UI asks for confirmation (shows the existing best score) and only claims it after you confirm (`force: true`). Claiming keeps that name's own best.
+
+**A new name is a new player.** The Best box shows the saved name's best from the server: 0 for a new name, and the name's own best for an existing one. It is never this browser's best from a previous name, and the old name's board entry stays as it was. A name only appears on the board once a run played under it scores more than 0. Scores always go to the name the run started with. The name box and Save name are locked while a run is live or paused, and a score that failed to save stays with the name that scored it, even after a rename. On reload, the Best box takes the cached name's best from the server (0 if the name has no record).
 
 Changing the name input clears the session “saved” flag until you save again. Start / overlay Start stay disabled until a successful save this session.
 
-The **Arcade board** panel lists all players sorted by best score (desc), with a small tag showing the difficulty the best was set on (older entries saved before this feature have no tag). It refreshes on load, after save, and when a new best is synced.
+The **Arcade board** panel lists all players with a best above 0, sorted by best score (desc), with a small tag showing the difficulty the best was set on (older entries saved before this feature have no tag). It shows each player's **best** score only, so a game that doesn't beat your best leaves your row unchanged.
+
+Scores are saved with `POST /api/score`: each new best during a run, and the final score at every game over / End game. The client sends one request at a time (only the highest waiting score), retries transient failures (0.4 s, 1.2 s, 3 s), and redraws the board from the save's own response, with a status line under the board header ("Saved: 120 is your best on the arcade board." / "Score 40. The board keeps your best: 120."). If a save still fails, the status line says so, with a **Retry** button; the failed score is also re-sent at the next game over. The board also refreshes on load and after Save name. API GETs use a unique query string and the server sends `Cache-Control: no-store`, because the IIS ARR proxy otherwise caches identical GETs for about a minute.
 
 ### API
 
 - `GET /api/health` → `{ ok, app, node, port, time }`
-- `GET /api/players` → `{ revision, players: [{ playerName, best, bestDifficulty?, updatedAt, key }] }` sorted by best
+- `GET /api/players` → `{ revision, players: [{ playerName, best, bestDifficulty?, updatedAt, key }] }` sorted by best; players with best 0 aren't listed (their record and name claim remain)
 - `GET /api/settings?player=` → one player record (+ `revision`)
-- `PUT /api/settings` body: `{ playerName, muted, difficulty, best, bestDifficulty?, force?, baseRevision? }`
-  - `difficulty` / `bestDifficulty`: `easy` | `normal` | `hard`. The legacy value `fast` is still accepted and stored as `hard`. If `bestDifficulty` is omitted, the previous tag is kept unless `best` changed.
+- `POST /api/score` body: `{ playerName, score, difficulty, epoch? }` → `{ ok, improved, stale, score, player, revision, players }`
+  - The server keeps the higher of `score` and the stored best (and tags it with `difficulty` when the score is higher), so score saves can overlap, repeat, or arrive out of order without lowering a best. No `baseRevision`: another player's save can't make a score save fail. Creates the player record if it's missing and `score` > 0. `players` is the full board, like `GET /api/players`.
+  - `epoch`: the player's `scoreEpoch` when the run started. A score with an older epoch (from before a reset) is ignored (`stale: true`). Clients that don't send it are accepted.
+  - `400` `{ error: "playerName_rejected" | "score_invalid" }`, `503` `{ error: "lock_busy" }`, `500` `{ error: "write_failed" }`
+- `POST /api/reset-best` body: `{ playerName }` → `{ ok, found, previousBest, player, revision, players }`
+  - Sets that player's best to 0, removes its difficulty tag and bumps its `scoreEpoch`. It's then off the board. Other players are untouched. For an unknown name it changes nothing (`found: false`). This is the only way a best goes down.
+- `PUT /api/settings` body: `{ playerName, muted, difficulty, force?, baseRevision? }`
+  - `difficulty`: `easy` | `normal` | `hard`. The legacy value `fast` is still accepted and stored as `hard`.
   - `400` `{ error: "playerName_rejected", message }` — PG / validation reject
   - `409` `{ error: "name_exists", existing, revision }` — name taken and `force` not set
   - `409` `{ error: "revision_conflict" | "lock_busy", revision }` — concurrency
   - `200` saved player + `revision`
+  - Never changes the best score: a `best` / `bestDifficulty` in the body (older clients) is ignored. A new record starts at 0, and an existing or claimed one keeps its own best.
+- All `/api` responses send `Cache-Control: no-store`.
 
 Store shape:
 
@@ -149,13 +163,14 @@ Store shape:
       "difficulty": "normal",
       "best": 120,
       "bestDifficulty": "hard",
+      "scoreEpoch": 0,
       "updatedAt": "2026-09-13T12:00:00.000Z"
     }
   }
 }
 ```
 
-Writes use a `.lock` file (`wx` + retries/backoff/jitter) and bump `revision` each successful write. The HTTP server binds `localhost` only. On Windows with Node 17+ `localhost` may resolve to IPv6 `::1` only, so the IIS reverse proxy targets `http://localhost:3105` (not `127.0.0.1`); that works whether Node ends up on `::1` or `127.0.0.1`.
+Writes use a `.lock` file (`wx` + retries/backoff/jitter), write to a temp file and rename it over `settings.json` (retrying briefly if Windows reports the file busy), and bump `revision` each successful write. A write never proceeds from an unreadable `settings.json` (that would wipe the board); the request fails instead. The HTTP server binds `localhost` only. On Windows with Node 17+ `localhost` may resolve to IPv6 `::1` only, so the IIS reverse proxy targets `http://localhost:3105` (not `127.0.0.1`); that works whether Node ends up on `::1` or `127.0.0.1`.
 
 Names are filtered client- and server-side (base64 blocked list) for a professional portfolio.
 
