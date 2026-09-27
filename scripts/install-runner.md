@@ -19,7 +19,7 @@ Assumed layout (matches `scripts/deploy.ps1` defaults and the workflow `env:`):
 | Node.js | on `PATH`, or `C:\Program Files\nodejs` |
 | Data backups | `C:\WebApps\SnakeArcade-backups` (a copy of `settings.json` before each deploy, last 20 kept) |
 | Runner folder | `C:\actions-runner` |
-| Runner account | local user `svc-snakearcade-deploy` (not an administrator) |
+| Runner account | local user `svc-snakearcade` (not an administrator) |
 
 If any of these differ, change the `env:` block in `.github/workflows/deploy.yml`.
 
@@ -28,12 +28,13 @@ If any of these differ, change the `env:` block in `.github/workflows/deploy.yml
 ## 1. Create a dedicated, non-admin service account
 
 ```powershell
-$pw = Read-Host -AsSecureString "Password for svc-snakearcade-deploy"
-New-LocalUser -Name "svc-snakearcade-deploy" -Password $pw `
+$pw = Read-Host -AsSecureString "Password for svc-snakearcade"
+New-LocalUser -Name "svc-snakearcade" -Password $pw `
   -PasswordNeverExpires -UserMayNotChangePassword -AccountNeverExpires `
   -Description "GitHub Actions runner for SnakeArcade deploys"
 ```
 
+Windows limits local account names to 20 characters, so keep the name short.
 Do **not** add it to Administrators. (On a domain you can use a gMSA
 instead; the grants below are the same.)
 
@@ -42,9 +43,9 @@ instead; the grants below are the same.)
 ### 2a. Write access to the content root and backup folder
 
 ```powershell
-icacls "C:\WebApps\SnakeArcade" /grant "svc-snakearcade-deploy:(OI)(CI)M"
+icacls "C:\WebApps\SnakeArcade" /grant "svc-snakearcade:(OI)(CI)M"
 New-Item -ItemType Directory -Force "C:\WebApps\SnakeArcade-backups" | Out-Null
-icacls "C:\WebApps\SnakeArcade-backups" /grant "svc-snakearcade-deploy:(OI)(CI)M"
+icacls "C:\WebApps\SnakeArcade-backups" /grant "svc-snakearcade:(OI)(CI)M"
 ```
 
 `M` (Modify) is needed because the mirror deletes files that were removed
@@ -59,7 +60,7 @@ restored.
 
 ```powershell
 $svc  = "SnakeArcadeNode"
-$sid  = (New-Object System.Security.Principal.NTAccount("svc-snakearcade-deploy")).Translate(
+$sid  = (New-Object System.Security.Principal.NTAccount("svc-snakearcade")).Translate(
           [System.Security.Principal.SecurityIdentifier]).Value
 $sd   = ((sc.exe sdshow $svc) | Where-Object { $_ }) -join ""
 $sd | Set-Content "C:\WebApps\SnakeArcade-backups\SnakeArcadeNode-sddl-original.txt"
@@ -101,9 +102,10 @@ after about an hour).
 cd C:\actions-runner
 .\config.cmd --url https://github.com/bigmac529/SnakeArcade --token <TOKEN> `
   --name snakearcade-prod --labels snakearcade --runasservice `
-  --windowslogonaccount ".\svc-snakearcade-deploy"
+  --windowslogonaccount ".\svc-snakearcade"
 ```
 
+- If the password contains cmd.exe special characters (`& | < > ^ %`), `config.cmd` breaks; run `.\bin\Runner.Listener.exe configure ...` with the same arguments instead, or use a letters-and-digits password.
 - Leave `--windowslogonpassword` off so `config.cmd` prompts for the password
   (keeps it out of shell history).
 - The runner gets `self-hosted`, `Windows`, `X64` automatically; `snakearcade`
