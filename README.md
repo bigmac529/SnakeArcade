@@ -25,13 +25,25 @@ Dev script is the same entrypoint: `npm run dev`.
 
 Pick **Difficulty** before you press **Start**. The snake moves at one fixed speed for the whole run. It never speeds up over time or as your score grows.
 
-| Difficulty | Tick (ms per block) | Points per dot |
-| --- | --- | --- |
-| Easy | 1000 | 5 |
-| Normal (default) | 500 | 10 |
-| Hard | 250 | 20 |
+| Difficulty | Tick (ms per block) | Speed | Points per dot |
+| --- | --- | --- | --- |
+| Easy | 256 | 3.9 blocks per second | 5 |
+| Normal (default) | 128 | 7.8 blocks per second | 10 |
+| Hard | 64 | 15.6 blocks per second | 20 |
+
+The values live in `DIFFICULTIES` at the top of `game.js`. Hover or focus the dropdown, or tap the small **i** button next to it (phones), to see a tooltip with the points per dot and speed of each level, with the current choice highlighted. The tooltip text is built from `DIFFICULTIES`, so it always matches the real numbers. It never opens during a live run.
 
 The dropdown is disabled while a run is live or paused. A change applies from the next **Start** / **Restart**, so it can never change the speed of a game in progress. Saved settings from the old **Pace** control carry over: `easy` and `normal` stay the same, and `fast` becomes **Hard**.
+
+### Board size
+
+The board always has 24 rows and square cells. The cell size comes from the height left on screen (capped so a board narrower than it is tall stays a 24x24 square). Columns are then added until the board fills the full width of its column: beside the Arcade board on desktop, the full screen width on phones. For example, 1280x800 gives 42x24 with 16 px cells, and a 390x844 phone gives 24x24. The canvas spans the exact container width. Any leftover of less than one cell is split into a thin, darker margin with an edge line, so the walls stay clear.
+
+The column count is chosen only between games: when a run starts (sized for the in-play layout, which on phones hides the setup panels) and when a new game is reset. Resizing or rotating during a run only rescales the drawing, and the game-over screen keeps the run's grid. Food spawning and wall collisions use the current column and row counts. Scores from different grid sizes share one leaderboard.
+
+### Smooth movement
+
+Game logic runs on the fixed grid tick above: turns, eating, growth, collisions and scoring all happen once per tick, cell by cell. Only the drawing is smooth. Each animation frame (`requestAnimationFrame`) draws the snake part-way between its previous and current cells, based on how much of the tick has passed, so it glides instead of jumping. The body is drawn as one path through the centre of each occupied cell, so turns go around the corner cell rather than cutting diagonally. The picture trails the game state by less than one tick. Pause freezes the snake mid-glide, game over shows the exact final cells, and with the OS "reduce motion" setting the snake snaps from cell to cell as before.
 
 ### Phone / touch: two buttons
 

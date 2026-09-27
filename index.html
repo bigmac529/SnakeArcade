@@ -52,14 +52,17 @@
           <button id="restart" type="button">Restart</button>
           <button id="mute" type="button" aria-pressed="false" title="Toggle sound">Sound: On</button>
         </div>
-        <label class="difficulty">
-          <span>Difficulty</span>
-          <select id="difficulty" aria-label="Difficulty">
+        <div class="difficulty">
+          <label class="difficulty-label" for="difficulty">Difficulty</label>
+          <button class="info-btn" id="difficulty-info" type="button" aria-label="Difficulty details" aria-describedby="difficulty-tip" aria-expanded="false" aria-controls="difficulty-tip">i</button>
+          <select id="difficulty" aria-label="Difficulty" aria-describedby="difficulty-tip">
             <option value="easy">Easy</option>
             <option value="normal" selected>Normal</option>
             <option value="hard">Hard</option>
           </select>
-        </label>
+          <!-- Filled from DIFFICULTIES in game.js so it always matches the real speeds/points. -->
+          <div class="difficulty-tip" id="difficulty-tip" role="tooltip" hidden></div>
+        </div>
       </div>
 
       <p class="help" id="help">

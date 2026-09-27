@@ -10,6 +10,9 @@
   const muteBtn = document.querySelector("#mute");
   const overlayStartBtn = document.querySelector("#overlay-start");
   const difficultyEl = document.querySelector("#difficulty");
+  const difficultyWrap = document.querySelector(".difficulty");
+  const difficultyInfoBtn = document.querySelector("#difficulty-info");
+  const difficultyTip = document.querySelector("#difficulty-tip");
   const statusEl = document.querySelector("#status");
   const boardEl = document.querySelector("#arcade-board");
   const boardListEl = document.querySelector("#arcade-board-list");
@@ -21,19 +24,33 @@
   const turnButtons = document.querySelectorAll(".turn-btn[data-turn]");
   const rootEl = document.documentElement;
 
-  const cells = 24;
-  // Design-time tile size (640px board / 24 cells); drawing insets scale from it.
-  const designTile = 640 / cells;
+  // The board always has 24 rows. Columns are added when the content column is
+  // wider than a 24x24 square would be (cells stay square), so the board fills
+  // the available width. The column count only changes between games.
+  const rows = 24;
+  const minCols = 24;
+  let cols = 24;
+  // Design-time tile size (640px board / 24 rows); drawing insets scale from it.
+  const designTile = 640 / rows;
   const minArena = 180;
   const maxArena = 640;
   const maxQueuedTurns = 2;
-  let tile = canvas.width / cells;
+  let tile = canvas.height / rows;
   let drawScale = tile / designTile;
-  const initialSnake = [
-    { x: 11, y: 12 },
-    { x: 10, y: 12 },
-    { x: 9, y: 12 }
-  ];
+  // Device-pixel offset of the playable grid inside the canvas. The canvas
+  // spans the full container width; the grid (whole cells only) is centred in
+  // it with a margin of less than one cell.
+  let gridOffsetX = 0;
+
+  function initialSnake() {
+    const headX = Math.floor(cols / 2) - 1;
+    const y = Math.floor(rows / 2);
+    return [
+      { x: headX, y },
+      { x: headX - 1, y },
+      { x: headX - 2, y }
+    ];
+  }
   // Fixed tick interval (ms per block) and points per food dot. The speed never
   // changes during a run: no ramp-up with time or score.
   const DIFFICULTIES = {
@@ -54,6 +71,11 @@
 
   let snake;
   let food;
+  // Rendering only: where each segment was before the last tick, so draw() can
+  // slide it toward its current cell. Game logic never reads these.
+  let prevSnake = null;
+  let eatenFood = null;
+  let frameTime = 0;
   let direction;
   // Pending heading changes, applied one per tick so two quick turns can never
   // add up to a 180-degree reversal inside a single step.
@@ -148,7 +170,154 @@
       pushServerState({ force: true, quiet: true });
     }
     announce(`Difficulty set to ${DIFFICULTIES[runDifficulty].label}.`);
+    renderDifficultyTip();
   });
+
+  // ---- Difficulty tooltip: points per dot + movement rate for each level.
+  // Desktop: hover or keyboard focus on the dropdown / (i) button. Phones: tap
+  // the (i) button or focus the dropdown. Never shown during play.
+  let tipPinned = false;
+  let tipHover = false;
+
+  function blocksPerSecond(tickMs) {
+    const rate = Math.round((1000 / tickMs) * 10) / 10;
+    const text = Number.isInteger(rate) ? String(rate) : rate.toFixed(1);
+    return `${text} block${rate === 1 ? "" : "s"} per second`;
+  }
+
+  function renderDifficultyTip() {
+    const selected = selectedDifficulty();
+    difficultyTip.innerHTML = "";
+    const title = document.createElement("p");
+    title.className = "tip-title";
+    title.textContent = "Points and speed (fixed all game)";
+    const list = document.createElement("ul");
+    Object.entries(DIFFICULTIES).forEach(([key, d]) => {
+      const li = document.createElement("li");
+      li.dataset.difficulty = key;
+      const name = document.createElement("strong");
+      name.textContent = d.label;
+      li.appendChild(name);
+      li.appendChild(document.createTextNode(`: ${d.points} points per dot, ${blocksPerSecond(d.tickMs)}`));
+      if (key === selected) {
+        li.classList.add("is-selected");
+        li.setAttribute("aria-current", "true");
+        const tag = document.createElement("span");
+        tag.className = "tip-selected sr-only";
+        tag.textContent = " (selected)";
+        li.appendChild(tag);
+      }
+      list.appendChild(li);
+    });
+    difficultyTip.append(title, list);
+  }
+
+  function isLivePlay() {
+    return running && !paused && !gameOver;
+  }
+
+  function positionDifficultyTip() {
+    const margin = 8;
+    const gap = 10;
+    const anchor = difficultyEl.getBoundingClientRect();
+    const vw = document.documentElement.clientWidth || window.innerWidth;
+    const vh = window.innerHeight;
+    difficultyTip.style.maxWidth = `${vw - margin * 2}px`;
+    const tipRect = difficultyTip.getBoundingClientRect();
+    let left = anchor.left + anchor.width / 2 - tipRect.width / 2;
+    left = Math.max(margin, Math.min(left, vw - margin - tipRect.width));
+    // Above the dropdown; only flip below if there is truly no room above.
+    let top = anchor.top - gap - tipRect.height;
+    const below = top < margin && anchor.bottom + gap + tipRect.height <= vh - margin;
+    if (below) {
+      top = anchor.bottom + gap;
+    } else {
+      top = Math.max(margin, top);
+    }
+    difficultyTip.classList.toggle("is-below", below);
+    difficultyTip.style.left = `${Math.round(left)}px`;
+    difficultyTip.style.top = `${Math.round(top)}px`;
+    const arrowX = Math.max(14, Math.min(tipRect.width - 14, anchor.left + anchor.width / 2 - left));
+    difficultyTip.style.setProperty("--arrow-x", `${Math.round(arrowX)}px`);
+  }
+
+  function showDifficultyTip() {
+    if (isLivePlay()) {
+      return;
+    }
+    renderDifficultyTip();
+    difficultyTip.hidden = false;
+    difficultyInfoBtn.setAttribute("aria-expanded", "true");
+    positionDifficultyTip();
+  }
+
+  function hideDifficultyTip() {
+    tipPinned = false;
+    tipHover = false;
+    difficultyTip.hidden = true;
+    difficultyInfoBtn.setAttribute("aria-expanded", "false");
+  }
+
+  function syncDifficultyTip() {
+    const focused = difficultyWrap.contains(document.activeElement) &&
+      document.activeElement !== document.body;
+    if (!isLivePlay() && (tipPinned || tipHover || focused)) {
+      showDifficultyTip();
+    } else {
+      hideDifficultyTip();
+    }
+  }
+
+  [difficultyEl, difficultyInfoBtn, difficultyTip].forEach((el) => {
+    el.addEventListener("pointerenter", (event) => {
+      if (event.pointerType === "mouse") {
+        tipHover = true;
+        syncDifficultyTip();
+      }
+    });
+    el.addEventListener("pointerleave", (event) => {
+      if (event.pointerType === "mouse") {
+        tipHover = false;
+        // Let the pointer cross the gap between the control and the tooltip.
+        setTimeout(() => {
+          if (!tipHover) {
+            syncDifficultyTip();
+          }
+        }, 120);
+      }
+    });
+  });
+  difficultyWrap.addEventListener("focusin", syncDifficultyTip);
+  difficultyWrap.addEventListener("focusout", () => setTimeout(syncDifficultyTip, 0));
+  difficultyInfoBtn.addEventListener("click", (event) => {
+    event.preventDefault();
+    if (isLivePlay()) {
+      return;
+    }
+    if (difficultyTip.hidden || !tipPinned) {
+      tipPinned = true;
+      showDifficultyTip();
+    } else {
+      hideDifficultyTip();
+    }
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (!difficultyTip.hidden && !difficultyWrap.contains(event.target)) {
+      hideDifficultyTip();
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !difficultyTip.hidden) {
+      hideDifficultyTip();
+    }
+  });
+  const repositionTip = () => {
+    if (!difficultyTip.hidden) {
+      positionDifficultyTip();
+    }
+  };
+  window.addEventListener("resize", repositionTip);
+  window.addEventListener("scroll", repositionTip, { passive: true });
 
   nameInput.addEventListener("input", () => {
     // Changing the name clears the session "saved" gate.
@@ -458,11 +627,17 @@
     } else if (paused) {
       lastMove += performance.now() - pausedAt;
     }
+    const freshRun = !running;
     running = true;
     paused = false;
     pauseBtn.textContent = "Pause";
     setOverlay(null);
     updatePlayState();
+    if (freshRun) {
+      // Size the grid for the in-play layout (phones collapse the setup UI,
+      // freeing height). This is the last moment columns may change.
+      layoutArena({ regrid: true, fresh: true });
+    }
     window.scrollTo(0, 0);
     announce("Game started.");
     beep(520, 0.05, "triangle", 0.03);
@@ -646,7 +821,11 @@
   }
 
   function reset() {
-    snake = initialSnake.map((part) => ({ ...part }));
+    // A fresh game may pick up a new column count (window resized since).
+    layoutArena({ regrid: true, placing: true });
+    snake = initialSnake();
+    prevSnake = null;
+    eatenFood = null;
     direction = { x: 1, y: 0 };
     turnQueue = [];
     canvas.dataset.heading = headingName(direction);
@@ -677,6 +856,7 @@
   }
 
   function loop(time) {
+    frameTime = time;
     if (running && !paused) {
       const elapsed = time - lastMove;
       if (elapsed >= moveDelay) {
@@ -703,8 +883,10 @@
       x: snake[0].x + direction.x,
       y: snake[0].y + direction.y
     };
+    prevSnake = snake.map((part) => ({ ...part }));
+    eatenFood = null;
 
-    if (head.x < 0 || head.x >= cells || head.y < 0 || head.y >= cells || hitsSnake(head)) {
+    if (head.x < 0 || head.x >= cols || head.y < 0 || head.y >= rows || hitsSnake(head)) {
       finish();
       return;
     }
@@ -714,6 +896,7 @@
     if (head.x === food.x && head.y === food.y) {
       score += DIFFICULTIES[runDifficulty].points;
       scoreEl.textContent = score;
+      eatenFood = { ...food };
       food = placeFood();
       beep(760, 0.06, "square", 0.035);
 
@@ -755,9 +938,22 @@
   }
 
   function draw() {
-    ctx.fillStyle = "#0c1013";
+    const boardW = cols * tile;
+    const boardH = rows * tile;
+    // Margin outside the grid (less than one cell wide) is darker, with a thin
+    // edge line so the walls are unambiguous.
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = "#080b0d";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.translate(gridOffsetX, 0);
+    ctx.fillStyle = "#0c1013";
+    ctx.fillRect(0, 0, boardW, boardH);
     drawGrid();
+    if (gridOffsetX >= 2) {
+      ctx.strokeStyle = "rgba(134, 214, 114, 0.28)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(-0.5, -0.5, boardW + 1, boardH + 1);
+    }
 
     const k = drawScale;
     const pulse = reduceMotion ? 0 : Math.sin(foodPulse) * 2 * k;
@@ -771,29 +967,92 @@
     );
     ctx.fill();
 
-    snake.forEach((part, index) => {
-      ctx.fillStyle = index === 0 ? "#a7f08d" : "#86d672";
-      roundRect(part.x * tile + 3 * k, part.y * tile + 3 * k, tile - 6 * k, tile - 6 * k, 6 * k);
+    const t = renderFraction();
+
+    // The dot just eaten shrinks away as the head slides onto it.
+    if (eatenFood && t < 1) {
+      const size = (tile - 10 * k) * (1 - t);
+      const cx = (eatenFood.x + 0.5) * tile;
+      const cy = (eatenFood.y + 0.5) * tile;
+      ctx.fillStyle = "#f2c94c";
+      roundRect(cx - size / 2, cy - size / 2, size, size, Math.min(7 * k, size / 2));
       ctx.fill();
-    });
+    }
+
+    const seg = tile - 6 * k;
+    const center = (p) => ({ x: (p.x + 0.5) * tile, y: (p.y + 0.5) * tile });
+    const headPos = segmentPosition(0, t);
+    const tailPos = segmentPosition(snake.length - 1, t);
+    // Body: one continuous stroke from the head, through the centre of every
+    // occupied cell (so corners go through the corner cell, never a diagonal),
+    // to the tail end. Each segment only ever moves between adjacent cells.
+    const path = [headPos, ...snake.slice(1), tailPos].map(center);
+    ctx.strokeStyle = "#86d672";
+    ctx.lineWidth = seg;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "butt";
+    ctx.beginPath();
+    ctx.moveTo(path[0].x, path[0].y);
+    for (let i = 1; i < path.length; i += 1) {
+      ctx.lineTo(path[i].x, path[i].y);
+    }
+    ctx.stroke();
+
+    const tailC = center(tailPos);
+    ctx.fillStyle = "#86d672";
+    roundRect(tailC.x - seg / 2, tailC.y - seg / 2, seg, seg, 6 * k);
+    ctx.fill();
+
+    const headC = center(headPos);
+    ctx.fillStyle = "#a7f08d";
+    roundRect(headC.x - seg / 2, headC.y - seg / 2, seg, seg, 6 * k);
+    ctx.fill();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
   }
 
+  // Fraction (0..1) of the current tick that has elapsed, used only to draw
+  // segments between their previous and current cells. Snaps to 1 (grid
+  // positions) before a run, after game over and with reduced motion; frozen
+  // while paused.
+  function renderFraction() {
+    if (reduceMotion || !prevSnake || !running || gameOver) {
+      return 1;
+    }
+    const now = paused ? pausedAt : frameTime;
+    return Math.max(0, Math.min(1, (now - lastMove) / moveDelay));
+  }
+
+  function segmentPosition(index, t) {
+    const cur = snake[index];
+    const prev = prevSnake && prevSnake[index];
+    if (!prev || t >= 1) {
+      return { x: cur.x, y: cur.y };
+    }
+    return { x: prev.x + (cur.x - prev.x) * t, y: prev.y + (cur.y - prev.y) * t };
+  }
+
+  // Grid lines in board coordinates (the caller translates to the grid origin).
   function drawGrid() {
     ctx.strokeStyle = "rgba(255,255,255,0.08)";
     const lineWidth = Math.max(1, Math.round(drawScale));
     // Odd widths need a half-pixel offset to land on whole device pixels.
     const offset = lineWidth % 2 ? 0.5 : 0;
     ctx.lineWidth = lineWidth;
+    const boardW = cols * tile;
+    const boardH = rows * tile;
 
-    for (let i = 1; i < cells; i += 1) {
+    for (let i = 1; i < cols; i += 1) {
       const pos = Math.round(i * tile) + offset;
       ctx.beginPath();
       ctx.moveTo(pos, 0);
-      ctx.lineTo(pos, canvas.height);
+      ctx.lineTo(pos, boardH);
       ctx.stroke();
+    }
+    for (let i = 1; i < rows; i += 1) {
+      const pos = Math.round(i * tile) + offset;
       ctx.beginPath();
       ctx.moveTo(0, pos);
-      ctx.lineTo(canvas.width, pos);
+      ctx.lineTo(boardW, pos);
       ctx.stroke();
     }
   }
@@ -813,8 +1072,8 @@
 
     do {
       candidate = {
-        x: Math.floor(Math.random() * cells),
-        y: Math.floor(Math.random() * cells)
+        x: Math.floor(Math.random() * cols),
+        y: Math.floor(Math.random() * rows)
       };
     } while (snake.some((part) => part.x === candidate.x && part.y === candidate.y));
 
@@ -861,7 +1120,11 @@
     // No difficulty changes while a run is live or paused.
     const locked = running && !gameOver;
     difficultyEl.disabled = locked;
-    difficultyEl.title = locked ? "Difficulty is locked until this run ends" : "Difficulty for the next run";
+    difficultyEl.title = locked ? "Difficulty is locked until this run ends" : "";
+    if (playing) {
+      // The tooltip must never cover the board during play.
+      hideDifficultyTip();
+    }
     // Hidden panels change what sits above the arena, so resize right away.
     layoutArena();
   }
@@ -886,11 +1149,15 @@
     return window.innerHeight;
   }
 
-  // Size the square board from the space actually left on screen: width of the
-  // arena slot, and viewport height minus everything above the arena and the
-  // turn buttons / padding below it. Backing store is snapped to a whole number
-  // of device pixels per cell so the grid stays crisp on high-DPR screens.
-  function layoutArena() {
+  // Size the board from the space actually left on screen: width of the arena
+  // slot, and viewport height minus everything above the arena and the turn
+  // buttons / padding below it. The row count is fixed; the cell size comes
+  // from the height (capped so a narrow screen keeps a 24x24 square), and
+  // between games the column count is chosen so the board fills the width.
+  // Mid-run (and on the game-over screen) the columns never change: the board
+  // is only rescaled. Cells are a whole number of device pixels so the grid
+  // stays crisp on high-DPR screens.
+  function layoutArena({ regrid = false, placing = false, fresh = false } = {}) {
     const dpr = Math.max(1, window.devicePixelRatio || 1);
     const slotRect = arenaSlot.getBoundingClientRect();
     const slotTop = slotRect.top + window.scrollY;
@@ -907,25 +1174,55 @@
     const padBottom = parseFloat(shellStyle.paddingBottom) || 0;
     const availH = viewportHeight() - slotTop - belowArena - padBottom;
     const availW = arenaSlot.clientWidth;
-    let cssSize = Math.floor(Math.min(availW, availH, maxArena));
-    cssSize = Math.max(Math.min(minArena, availW), cssSize);
+    const widthPx = Math.max(Math.floor(minArena * dpr), Math.floor(availW * dpr));
+    const heightCap = Math.max(Math.min(minArena, availW), Math.floor(Math.min(availH, maxArena)));
 
-    const tileDevice = Math.max(4, Math.floor((cssSize * dpr) / cells));
-    const devicePx = tileDevice * cells;
-    const finalCss = devicePx / dpr;
+    const allowRegrid = regrid || (!running && !gameOver);
+    let tileDevice;
+    let nextCols = cols;
+    if (allowRegrid) {
+      const squareSide = Math.min(heightCap, availW);
+      tileDevice = Math.max(4, Math.floor((squareSide * dpr) / rows));
+      nextCols = Math.max(minCols, Math.floor(widthPx / tileDevice));
+    } else {
+      tileDevice = Math.max(4, Math.floor(Math.min(widthPx / cols, (heightCap * dpr) / rows)));
+    }
 
-    if (canvas.width !== devicePx) {
-      canvas.width = devicePx;
-      canvas.height = devicePx;
-    }
-    const cssText = `${finalCss}px`;
-    if (canvasWrap.style.width !== cssText) {
-      canvasWrap.style.width = cssText;
-      canvasWrap.style.height = cssText;
-      stageEl.style.setProperty("--arena-size", cssText);
-    }
+    const colsChanged = nextCols !== cols;
+    cols = nextCols;
     tile = tileDevice;
     drawScale = tile / designTile;
+    const boardDevW = cols * tile;
+    const canvasW = Math.max(boardDevW, widthPx);
+    const canvasH = rows * tile;
+    gridOffsetX = Math.floor((canvasW - boardDevW) / 2);
+
+    if (canvas.width !== canvasW || canvas.height !== canvasH) {
+      canvas.width = canvasW;
+      canvas.height = canvasH;
+    }
+    const cssW = `${canvasW / dpr}px`;
+    const cssH = `${canvasH / dpr}px`;
+    if (canvasWrap.style.width !== cssW || canvasWrap.style.height !== cssH) {
+      canvasWrap.style.width = cssW;
+      canvasWrap.style.height = cssH;
+      stageEl.style.setProperty("--arena-size", cssW);
+    }
+    canvas.dataset.cols = String(cols);
+    canvas.dataset.rows = String(rows);
+    canvas.dataset.tile = String(tile);
+    canvas.dataset.offsetX = String(gridOffsetX);
+
+    // Before a run starts (or at the instant it starts, sized for the in-play
+    // layout), a new column count re-centres the snake and moves food that
+    // would now be off the board. (reset() does its own placing.)
+    if (colsChanged && !placing && snake && (fresh || (!running && !gameOver))) {
+      snake = initialSnake();
+      prevSnake = null;
+      if (!food || food.x >= cols || snake.some((p) => p.x === food.x && p.y === food.y)) {
+        food = placeFood();
+      }
+    }
     if (snake && food) {
       draw();
     }
