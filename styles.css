@@ -396,7 +396,7 @@ canvas:focus-visible {
   color: #102015;
 }
 
-#restart {
+#end-game {
   color: var(--accent-2);
 }
 
@@ -836,7 +836,7 @@ button:disabled,
   .is-playing .arcade-board,
   .is-playing .top-links,
   .is-playing #start,
-  .is-playing #restart,
+  .is-playing #end-game,
   .is-playing #mute,
   .is-playing .difficulty {
     display: none;

@@ -6,7 +6,7 @@
   const overlay = document.querySelector("#overlay");
   const startBtn = document.querySelector("#start");
   const pauseBtn = document.querySelector("#pause");
-  const restartBtn = document.querySelector("#restart");
+  const endBtn = document.querySelector("#end-game");
   const muteBtn = document.querySelector("#mute");
   const overlayStartBtn = document.querySelector("#overlay-start");
   const difficultyEl = document.querySelector("#difficulty");
@@ -140,14 +140,13 @@
     canvas.focus({ preventScroll: true });
   });
   pauseBtn.addEventListener("click", togglePause);
-  restartBtn.addEventListener("click", () => {
-    // Restart always begins a fresh run — require a saved name.
-    if (!ensureCanStart()) {
+  // End game: stop the current run (playing or paused) exactly like a game
+  // over. Nothing restarts; the player picks a difficulty and presses Start.
+  endBtn.addEventListener("click", () => {
+    if (!running || gameOver) {
       return;
     }
-    reset();
-    start();
-    canvas.focus({ preventScroll: true });
+    finish({ ended: true });
   });
   muteBtn.addEventListener("click", toggleMute);
   overlayStartBtn.addEventListener("click", () => {
@@ -511,7 +510,7 @@
     }
 
     if (event.key === " " || event.key === "Enter") {
-      // Start / Restart are button-only; Space/Enter only toggle pause while playing.
+      // Start / End game are button-only; Space/Enter only toggle pause while playing.
       if (!running || gameOver) {
         return;
       }
@@ -587,11 +586,9 @@
     const ok = canStart();
     startBtn.disabled = !ok || saveInFlight;
     overlayStartBtn.disabled = !ok || saveInFlight;
-    restartBtn.disabled = !ok || saveInFlight;
     saveNameBtn.disabled = saveInFlight;
     startBtn.title = ok ? "Start game" : "Save a PG name first";
     overlayStartBtn.title = startBtn.title;
-    restartBtn.title = ok ? "Restart" : "Save a PG name first";
     if (overlay && !overlay.classList.contains("hidden")) {
       const title = overlay.querySelector("h2");
       if (title && (title.textContent === "Press Start" || title.textContent === "Save a name")) {
@@ -616,7 +613,9 @@
     }
     ensureAudio();
 
-    if (gameOver) {
+    if (!running) {
+      // Every Start after an idle board (fresh page, game over or End game)
+      // is a brand-new game.
       reset();
     }
 
@@ -829,6 +828,7 @@
     direction = { x: 1, y: 0 };
     turnQueue = [];
     canvas.dataset.heading = headingName(direction);
+    canvas.dataset.head = `${snake[0].x},${snake[0].y}`;
     score = 0;
     ticks = 0;
     canvas.dataset.ticks = "0";
@@ -892,6 +892,7 @@
     }
 
     snake.unshift(head);
+    canvas.dataset.head = `${head.x},${head.y}`;
 
     if (head.x === food.x && head.y === food.y) {
       score += DIFFICULTIES[runDifficulty].points;
@@ -916,19 +917,22 @@
     }
   }
 
-  function finish() {
+  // Game over (crash) or End game. Either way the score already counted:
+  // a new best is saved the moment it is reached during the run.
+  function finish({ ended = false } = {}) {
     running = false;
+    paused = false;
     gameOver = true;
     turnQueue = [];
     pauseBtn.textContent = "Pause";
     updatePlayState();
-    beep(180, 0.18, "sawtooth", 0.04);
+    beep(180, ended ? 0.08 : 0.18, "sawtooth", ended ? 0.025 : 0.04);
 
-    const detail = beatBestThisRun
-      ? `New best: ${best}`
-      : "Press Restart to play again.";
-    announce(beatBestThisRun ? `Game over. New best ${best}.` : `Game over. Score ${score}.`);
-    setOverlay("Game Over", detail);
+    const next = "Pick a difficulty and press Start.";
+    const detail = beatBestThisRun ? `New best: ${best}. ${next}` : `Score ${score}. ${next}`;
+    const what = ended ? "Game ended" : "Game over";
+    announce(beatBestThisRun ? `${what}. New best ${best}.` : `${what}. Score ${score}.`);
+    setOverlay(ended ? "Game ended" : "Game Over", detail);
     if (beatBestThisRun) {
       overlay.querySelector("p").classList.add("new-best");
       refreshArcadeBoard();
@@ -956,6 +960,12 @@
     }
 
     const k = drawScale;
+    const preview = turnPreview();
+    publishTurnPreview(preview);
+    if (preview) {
+      drawTurnCells(preview);
+    }
+
     const pulse = reduceMotion ? 0 : Math.sin(foodPulse) * 2 * k;
     ctx.fillStyle = "#f2c94c";
     roundRect(
@@ -1007,7 +1017,117 @@
     ctx.fillStyle = "#a7f08d";
     roundRect(headC.x - seg / 2, headC.y - seg / 2, seg, seg, 6 * k);
     ctx.fill();
+    if (preview) {
+      drawTurnArrows(preview);
+    }
     ctx.setTransform(1, 0, 0, 1, 0, 0);
+  }
+
+  // ---- Turn preview: where a turn takes effect, straight from the game logic.
+  // step() applies at most one queued turn per tick and then moves the head
+  // from its current cell (snake[0]). So the first queued turn happens in
+  // snake[0], the second one cell further along the first new direction, and a
+  // turn pressed now happens in the cell after any queued turns (none if the
+  // queue is full). Only shown during a run; dimmed while paused.
+  function turnPreview() {
+    if (!running || gameOver || !snake) {
+      return null;
+    }
+    let pos = { x: snake[0].x, y: snake[0].y };
+    const queued = turnQueue.map((dir) => {
+      const cell = { x: pos.x, y: pos.y, dir };
+      pos = { x: pos.x + dir.x, y: pos.y + dir.y };
+      return cell;
+    });
+    const onBoard = (c) => c.x >= 0 && c.x < cols && c.y >= 0 && c.y < rows;
+    const next = turnQueue.length < maxQueuedTurns && onBoard(pos) ? pos : null;
+    return { queued: queued.filter(onBoard), next, dim: paused };
+  }
+
+  // Exposed as data attributes (only when they change) for tests / debugging.
+  function publishTurnPreview(preview) {
+    const next = preview && preview.next ? `${preview.next.x},${preview.next.y}` : "";
+    const queued = preview
+      ? preview.queued.map((c) => `${c.x},${c.y},${headingName(c.dir)}`).join(";")
+      : "";
+    if (canvas.dataset.turnNext !== next) {
+      canvas.dataset.turnNext = next;
+    }
+    if (canvas.dataset.turnQueued !== queued) {
+      canvas.dataset.turnQueued = queued;
+    }
+  }
+
+  const TURN_RGB = "108, 198, 255";
+
+  function drawTurnCells(preview) {
+    const k = drawScale;
+    const alpha = preview.dim ? 0.4 : 1;
+    const guideCell = preview.next || preview.queued[preview.queued.length - 1];
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    if (guideCell) {
+      // Faint row + column bands through the cell a turn would happen in.
+      ctx.fillStyle = `rgba(${TURN_RGB}, 0.07)`;
+      ctx.fillRect(0, guideCell.y * tile, cols * tile, tile);
+      ctx.fillRect(guideCell.x * tile, 0, tile, rows * tile);
+    }
+    const outline = (c, strength) => {
+      const inset = 1.5 * k;
+      ctx.shadowColor = `rgba(${TURN_RGB}, 0.8)`;
+      ctx.shadowBlur = 6 * k;
+      ctx.strokeStyle = `rgba(${TURN_RGB}, ${strength})`;
+      ctx.lineWidth = Math.max(1.5, 2 * k);
+      roundRect(c.x * tile + inset, c.y * tile + inset, tile - inset * 2, tile - inset * 2, 5 * k);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    };
+    preview.queued.forEach((c) => outline(c, 0.7));
+    if (preview.next) {
+      ctx.fillStyle = `rgba(${TURN_RGB}, 0.10)`;
+      const inset = 1.5 * k;
+      roundRect(preview.next.x * tile + inset, preview.next.y * tile + inset,
+        tile - inset * 2, tile - inset * 2, 5 * k);
+      ctx.fill();
+      outline(preview.next, 0.9);
+    }
+    ctx.restore();
+  }
+
+  // Small chevron in each queued turn cell pointing the new direction. Drawn
+  // on top of the snake, with a dark under-stroke so it reads on the head too.
+  function drawTurnArrows(preview) {
+    if (!preview.queued.length) {
+      return;
+    }
+    ctx.save();
+    ctx.globalAlpha = preview.dim ? 0.4 : 1;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    preview.queued.forEach((c) => {
+      ctx.save();
+      ctx.translate((c.x + 0.5) * tile, (c.y + 0.5) * tile);
+      ctx.rotate(Math.atan2(c.dir.y, c.dir.x));
+      const a = tile * 0.22;
+      const shape = () => {
+        ctx.beginPath();
+        ctx.moveTo(-a, 0);
+        ctx.lineTo(a * 0.9, 0);
+        ctx.moveTo(a * 0.1, -a * 0.8);
+        ctx.lineTo(a * 0.9, 0);
+        ctx.lineTo(a * 0.1, a * 0.8);
+      };
+      ctx.strokeStyle = "rgba(6, 12, 18, 0.75)";
+      ctx.lineWidth = Math.max(3, tile * 0.2);
+      shape();
+      ctx.stroke();
+      ctx.strokeStyle = `rgb(${TURN_RGB})`;
+      ctx.lineWidth = Math.max(1.5, tile * 0.1);
+      shape();
+      ctx.stroke();
+      ctx.restore();
+    });
+    ctx.restore();
   }
 
   // Fraction (0..1) of the current tick that has elapsed, used only to draw
@@ -1120,6 +1240,9 @@
     // No difficulty changes while a run is live or paused.
     const locked = running && !gameOver;
     difficultyEl.disabled = locked;
+    // End game only makes sense while a run is live or paused.
+    endBtn.disabled = !locked;
+    endBtn.title = locked ? "End this game now" : "No game in progress";
     difficultyEl.title = locked ? "Difficulty is locked until this run ends" : "";
     if (playing) {
       // The tooltip must never cover the board during play.
