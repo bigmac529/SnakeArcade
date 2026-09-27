@@ -112,11 +112,12 @@
     </section>
   </main>
 
-  <!-- Settings dialog. Per-browser preferences (localStorage), not sent to the server. -->
+  <!-- Settings dialog. Display preferences are per browser (localStorage), not sent to the
+       server; Reset best score changes the saved player's best on the server too. -->
   <div class="modal-backdrop" id="settings-backdrop" hidden>
     <div class="modal" id="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title" aria-describedby="settings-desc">
       <h2 id="settings-title">Settings</h2>
-      <p class="modal-desc" id="settings-desc">Turn highlight and turn timing. Changes apply right away and are saved in this browser.</p>
+      <p class="modal-desc" id="settings-desc">Turn highlight and turn timing (saved in this browser, applied right away), and your best score.</p>
       <div class="switch-list">
         <div class="switch-row">
           <label for="opt-guide">
@@ -150,6 +151,23 @@
           </span>
         </label>
       </fieldset>
+      <section class="reset-best" aria-labelledby="reset-best-title">
+        <div class="reset-row" id="reset-best-row">
+          <span class="reset-text">
+            <span class="switch-title" id="reset-best-title">Best score</span>
+            <span class="switch-hint" id="reset-best-hint">Resets the best for the saved name only.</span>
+          </span>
+          <button class="danger-btn" id="reset-best" type="button" aria-describedby="reset-best-hint">Reset best score</button>
+        </div>
+        <div class="reset-confirm" id="reset-best-confirm" role="group" aria-labelledby="reset-best-question" hidden>
+          <p id="reset-best-question"></p>
+          <div class="reset-confirm-actions">
+            <button id="reset-best-cancel" type="button">Cancel</button>
+            <button class="danger-btn" id="reset-best-yes" type="button">Reset</button>
+          </div>
+        </div>
+        <p class="reset-result" id="reset-best-result" role="status" aria-live="polite"></p>
+      </section>
       <div class="modal-actions">
         <button id="settings-close" type="button">Close</button>
       </div>

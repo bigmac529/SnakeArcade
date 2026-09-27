@@ -258,9 +258,11 @@ function defaultPlayerSettings(playerName = "") {
   };
 }
 
+// The board lists players who have scored: a saved name with no points yet
+// (best 0) keeps its record, and its name stays claimed, but isn't listed.
 function playersList(store) {
   return Object.entries(store.players || {})
-    .filter(([key, p]) => key !== "_guest" && p && p.playerName)
+    .filter(([key, p]) => key !== "_guest" && p && p.playerName && Number(p.best || 0) > 0)
     .map(([key, p]) => {
       const row = {
         playerName: p.playerName,
@@ -377,29 +379,21 @@ app.put("/api/settings", (req, res) => {
           normalizeDifficulty(body.difficulty) ||
           normalizeDifficulty(previous && previous.difficulty) ||
           "normal",
-        best: Number.isFinite(Number(body.best))
-          ? Number(body.best)
-          : Number((previous && previous.best) || 0),
+        // Scores only change through POST /api/score (runs actually played
+        // under this name). A best (or bestDifficulty) in this body is
+        // ignored: a renamed browser must not carry its old name's best to
+        // the new name, and claiming a name keeps that name's own best.
+        best: Number((previous && previous.best) || 0),
         version: 1,
         updatedAt: new Date().toISOString()
       };
       delete saved._missing;
       delete saved.revision;
-
-      // Optional: difficulty the best score was set on. Clients that don't send
-      // it keep the previous tag, unless the best score itself changed.
-      const bestDifficulty = normalizeDifficulty(body.bestDifficulty);
-      if (bestDifficulty) {
-        saved.bestDifficulty = bestDifficulty;
-      } else if (!previous || saved.best !== Number(previous.best || 0)) {
+      const keptDifficulty = previous ? normalizeDifficulty(previous.bestDifficulty) : null;
+      if (keptDifficulty && saved.best > 0) {
+        saved.bestDifficulty = keptDifficulty;
+      } else {
         delete saved.bestDifficulty;
-      } else if (saved.bestDifficulty) {
-        const kept = normalizeDifficulty(saved.bestDifficulty);
-        if (kept) {
-          saved.bestDifficulty = kept;
-        } else {
-          delete saved.bestDifficulty;
-        }
       }
 
       store.players[key] = saved;
@@ -473,16 +467,25 @@ app.post("/api/score", (req, res) => {
   }
   const difficulty = normalizeDifficulty(body.difficulty);
   const key = normalizePlayerKey(nameCheck.name);
+  // Score epoch the client's run started under (see /api/reset-best). Old
+  // clients don't send it and are accepted as before.
+  const epoch = body.epoch != null && body.epoch !== "" ? Number(body.epoch) : null;
 
   try {
     const result = withStoreLock(() => {
       const store = readStoreForWrite();
       const previous = store.players[key];
       const previousBest = Number((previous && previous.best) || 0);
+      const currentEpoch = Number((previous && previous.scoreEpoch) || 0);
+      if (previous && Number.isFinite(epoch) && epoch < currentEpoch) {
+        // A score from before this name's best was reset: ignore it, so a
+        // late or retried save can't bring the old best back.
+        return { improved: false, stale: true, player: previous, revision: store.revision, players: playersList(store) };
+      }
       const improved = score > previousBest;
       // Normally the player already exists (Save name creates the record);
-      // if it doesn't, create it rather than drop the score.
-      if (improved || !previous) {
+      // if it doesn't, create it rather than drop a real score.
+      if (improved) {
         const saved = {
           ...defaultPlayerSettings(nameCheck.name),
           ...(previous || {}),
@@ -516,8 +519,9 @@ app.post("/api/score", (req, res) => {
     return res.json({
       ok: true,
       improved: result.improved,
+      stale: Boolean(result.stale),
       score,
-      player: presentPlayer(result.player),
+      player: result.player ? presentPlayer(result.player) : { playerName: nameCheck.name, best: 0 },
       revision: result.revision,
       players: result.players
     });
@@ -535,6 +539,64 @@ app.post("/api/score", (req, res) => {
       error: "write_failed",
       message: "Could not save the score on the server."
     });
+  }
+});
+
+// Reset one player's best to 0 (Settings > Reset best score). Score submits
+// only ever raise a best, so this is the one deliberate way down. It bumps
+// the player's scoreEpoch: score saves sent under the old epoch (a run from
+// before the reset, still in flight or retried) are then ignored. A best of
+// 0 isn't listed on the board. Other players are untouched.
+app.post("/api/reset-best", (req, res) => {
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  const nameCheck = validatePlayerName(body.playerName != null ? body.playerName : "");
+  if (!nameCheck.ok) {
+    return res.status(400).json({
+      ok: false,
+      error: "playerName_rejected",
+      message: nameCheck.message
+    });
+  }
+  const key = normalizePlayerKey(nameCheck.name);
+  try {
+    const result = withStoreLock(() => {
+      const store = readStoreForWrite();
+      const previous = store.players[key];
+      if (!previous) {
+        return { found: false, previousBest: 0, player: null, revision: store.revision, players: playersList(store) };
+      }
+      const saved = {
+        ...previous,
+        best: 0,
+        scoreEpoch: Number(previous.scoreEpoch || 0) + 1,
+        updatedAt: new Date().toISOString()
+      };
+      delete saved.bestDifficulty;
+      store.players[key] = saved;
+      store.revision = Number(store.revision || 0) + 1;
+      atomicWriteJson(SETTINGS_FILE, store);
+      return {
+        found: true,
+        previousBest: Number(previous.best || 0),
+        player: saved,
+        revision: store.revision,
+        players: playersList(store)
+      };
+    });
+    return res.json({
+      ok: true,
+      found: result.found,
+      previousBest: result.previousBest,
+      player: result.player ? presentPlayer(result.player) : { playerName: nameCheck.name, best: 0, scoreEpoch: 0 },
+      revision: result.revision,
+      players: result.players
+    });
+  } catch (err) {
+    if (err && err.code === "lock_busy") {
+      return res.status(503).json({ ok: false, error: "lock_busy", message: "Arcade board is busy. Try again in a moment." });
+    }
+    console.error("reset-best failed:", err);
+    return res.status(500).json({ ok: false, error: "write_failed", message: "Could not reset the best score on the server." });
   }
 });
 

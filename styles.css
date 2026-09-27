@@ -597,9 +597,145 @@ input.switch:focus-visible {
   gap: 2px;
 }
 
+/* Reset best score (Settings). */
+.reset-best {
+  display: grid;
+  gap: 6px;
+}
+
+.reset-row,
+.reset-confirm {
+  align-items: center;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 10px 12px;
+}
+
+.reset-row[hidden],
+.reset-confirm[hidden] {
+  display: none;
+}
+
+.reset-text {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.reset-confirm {
+  border-color: rgba(255, 107, 107, 0.6);
+  flex-wrap: wrap;
+}
+
+.reset-confirm p {
+  flex: 1 1 220px;
+  font-size: 0.88rem;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.reset-confirm-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.danger-btn {
+  background: transparent;
+  border: 1px solid rgba(255, 107, 107, 0.7);
+  color: #ff8f8f;
+  flex: none;
+}
+
+.reset-confirm .danger-btn {
+  background: #d9534f;
+  border-color: #d9534f;
+  color: #fff;
+}
+
+.danger-btn:disabled {
+  border-color: var(--line);
+  color: var(--muted);
+}
+
+.reset-result {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.reset-result:empty {
+  display: none;
+}
+
+.reset-result[data-tone="ok"] {
+  color: var(--accent);
+}
+
+.reset-result[data-tone="error"] {
+  color: #ff8f8f;
+}
+
 .modal-actions {
+  background: var(--panel);
+  bottom: -18px;
   display: flex;
   justify-content: flex-end;
+  /* Close stays reachable even if a short screen makes the dialog scroll. */
+  margin: 0 -18px -18px;
+  padding: 0 18px 18px;
+  position: sticky;
+}
+
+/* Short screens (e.g. 360x740 phones): tighter spacing so the whole dialog,
+   including the Reset best score confirmation, fits without scrolling. */
+@media (max-height: 780px) {
+  .modal {
+    gap: 10px;
+    padding: 14px;
+  }
+
+  .modal-actions {
+    bottom: -14px;
+    margin: 0 -14px -14px;
+    padding: 0 14px 14px;
+  }
+
+  .modal-desc {
+    font-size: 0.82rem;
+  }
+
+  .switch-list {
+    gap: 8px;
+  }
+
+  .switch-row,
+  .reset-row,
+  .reset-confirm {
+    padding: 8px 10px;
+  }
+
+  .choice-group {
+    gap: 6px;
+    padding: 6px 10px 10px;
+  }
+
+  .choice {
+    padding: 6px 10px;
+  }
+
+  .switch-hint {
+    font-size: 0.78rem;
+  }
+
+  .modal button {
+    min-height: 40px;
+  }
 }
 
 #settings-close {
