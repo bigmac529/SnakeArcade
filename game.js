@@ -3,14 +3,16 @@
   const ctx = canvas.getContext("2d");
   const scoreEl = document.querySelector("#score");
   const bestEl = document.querySelector("#best");
-  const speedEl = document.querySelector("#speed");
   const overlay = document.querySelector("#overlay");
   const startBtn = document.querySelector("#start");
   const pauseBtn = document.querySelector("#pause");
-  const restartBtn = document.querySelector("#restart");
+  const endBtn = document.querySelector("#end-game");
   const muteBtn = document.querySelector("#mute");
   const overlayStartBtn = document.querySelector("#overlay-start");
   const difficultyEl = document.querySelector("#difficulty");
+  const difficultyWrap = document.querySelector(".difficulty");
+  const difficultyInfoBtn = document.querySelector("#difficulty-info");
+  const difficultyTip = document.querySelector("#difficulty-tip");
   const statusEl = document.querySelector("#status");
   const boardEl = document.querySelector("#arcade-board");
   const boardListEl = document.querySelector("#arcade-board-list");
@@ -22,34 +24,58 @@
   const turnButtons = document.querySelectorAll(".turn-btn[data-turn]");
   const rootEl = document.documentElement;
 
-  const cells = 24;
-  // Design-time tile size (640px board / 24 cells); drawing insets scale from it.
-  const designTile = 640 / cells;
+  // The board always has 24 rows. Columns are added when the content column is
+  // wider than a 24x24 square would be (cells stay square), so the board fills
+  // the available width. The column count only changes between games.
+  const rows = 24;
+  const minCols = 24;
+  let cols = 24;
+  // Design-time tile size (640px board / 24 rows); drawing insets scale from it.
+  const designTile = 640 / rows;
   const minArena = 180;
   const maxArena = 640;
   const maxQueuedTurns = 2;
-  let tile = canvas.width / cells;
+  let tile = canvas.height / rows;
   let drawScale = tile / designTile;
-  const initialSnake = [
-    { x: 11, y: 12 },
-    { x: 10, y: 12 },
-    { x: 9, y: 12 }
-  ];
-  const paceDelays = { easy: 160, normal: 125, fast: 95 };
-  const minDelay = 68;
+  // Device-pixel offset of the playable grid inside the canvas. The canvas
+  // spans the full container width; the grid (whole cells only) is centred in
+  // it with a margin of less than one cell.
+  let gridOffsetX = 0;
+
+  function initialSnake() {
+    const headX = Math.floor(cols / 2) - 1;
+    const y = Math.floor(rows / 2);
+    return [
+      { x: headX, y },
+      { x: headX - 1, y },
+      { x: headX - 2, y }
+    ];
+  }
+  // Fixed tick interval (ms per block) and points per food dot. The speed never
+  // changes during a run: no ramp-up with time or score.
+  const DIFFICULTIES = {
+    easy: { label: "Easy", tickMs: 256, points: 5 },
+    normal: { label: "Normal", tickMs: 128, points: 10 },
+    hard: { label: "Hard", tickMs: 64, points: 20 }
+  };
+  const normalizeDifficulty = window.SnakeSettings.normalizeDifficulty;
 
   const nameInput = document.querySelector("#player-name");
   const nameHint = document.querySelector("#name-hint");
   const saveNameBtn = document.querySelector("#save-settings");
 
   let settings = window.SnakeSettings.loadSettings();
-  let baseDelay = paceDelays[settings.difficulty] || paceDelays[difficultyEl.value] || 125;
   let nameSavedThisSession = false;
   let savedNameSnapshot = "";
   let saveInFlight = false;
 
   let snake;
   let food;
+  // Rendering only: where each segment was before the last tick, so draw() can
+  // slide it toward its current cell. Game logic never reads these.
+  let prevSnake = null;
+  let eatenFood = null;
+  let frameTime = 0;
   let direction;
   // Pending heading changes, applied one per tick so two quick turns can never
   // add up to a 180-degree reversal inside a single step.
@@ -60,28 +86,67 @@
   let paused = false;
   let gameOver = false;
   let lastMove = 0;
-  let moveDelay = baseDelay;
+  let pausedAt = 0;
+  let ticks = 0;
+  // Difficulty of the current / next run. Locked in when a run starts and never
+  // changed while it is in progress.
+  let runDifficulty = normalizeDifficulty(settings.difficulty);
+  let moveDelay = DIFFICULTIES[runDifficulty].tickMs;
   let foodPulse = 0;
   let muted = Boolean(settings.muted);
   let audioCtx = null;
   let beatBestThisRun = false;
+  // Provisional ticks: the last tick stays open for a correction during its
+  // first half (while the drawn head is still in the cell it is leaving).
+  // Every tick in Relaxed mode; in both modes the tick right after a turn, so
+  // a quick second press makes the tightest U-turn (see step()).
+  // { snap: state before the tick, turned: the tick applied a turn,
+  //   pending: effects held back until the window closes { ate, died } }
+  let grace = null;
+  // Rendering only: short blend of the head after a retroactive turn.
+  let retroBlend = null;
+  // Whether the last tick applied a turn (makes the next tick provisional).
+  let lastTickTurned = false;
+  const RETRO_BLEND_MS = 100;
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // Settings dialog preferences: turn highlight layers and turn eagerness.
+  // Per browser in localStorage, not per player: they are play/viewing
+  // preferences, and keeping them out of the server record leaves the
+  // settings API unchanged.
+  const DISPLAY_KEY = "snakearcade.prefs.v1";
+  const DISPLAY_DEFAULTS = { guide: true, marker: true, eagerness: "early" };
+  function loadDisplay() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(DISPLAY_KEY) || "{}") || {};
+      return {
+        guide: raw.guide !== false,
+        marker: raw.marker !== false,
+        eagerness: raw.eagerness === "relaxed" ? "relaxed" : "early"
+      };
+    } catch {
+      return { ...DISPLAY_DEFAULTS };
+    }
+  }
+  let display = loadDisplay();
 
   function applySettingsToUi(next) {
     settings = next;
     best = Number(next.best || 0);
     muted = Boolean(next.muted);
     bestEl.textContent = best;
-    difficultyEl.value = next.difficulty in paceDelays ? next.difficulty : "normal";
+    if (!running) {
+      difficultyEl.value = normalizeDifficulty(next.difficulty);
+    }
     nameInput.value = next.playerName || "";
     updateMuteUi();
-    applyPace();
+    applyDifficulty();
     applyName(next.playerName || "", { silent: true, persist: false });
     updateStartGateUi();
   }
 
   bestEl.textContent = best;
-  difficultyEl.value = settings.difficulty in paceDelays ? settings.difficulty : "normal";
+  difficultyEl.value = runDifficulty;
   nameInput.value = settings.playerName || "";
   updateMuteUi();
   applyName(settings.playerName || "", { silent: true, persist: false });
@@ -107,14 +172,16 @@
     canvas.focus({ preventScroll: true });
   });
   pauseBtn.addEventListener("click", togglePause);
-  restartBtn.addEventListener("click", () => {
-    // Restart always begins a fresh run — require a saved name.
-    if (!ensureCanStart()) {
+  // End game: stop the current run (playing or paused) exactly like a game
+  // over. Nothing restarts; the player picks a difficulty and presses Start.
+  endBtn.addEventListener("click", () => {
+    // Settle an open Relaxed tick first (its food counts; a crash it held
+    // back becomes the game over).
+    closeGrace();
+    if (!running || gameOver) {
       return;
     }
-    reset();
-    start();
-    canvas.focus({ preventScroll: true });
+    finish({ ended: true });
   });
   muteBtn.addEventListener("click", toggleMute);
   overlayStartBtn.addEventListener("click", () => {
@@ -125,14 +192,292 @@
     canvas.focus({ preventScroll: true });
   });
   difficultyEl.addEventListener("change", () => {
-    if (!running) {
-      applyPace();
-      speedEl.textContent = "1";
-      persistSettingsLocal({ difficulty: difficultyEl.value });
-      if (nameSavedThisSession) {
-        pushServerState({ force: true, quiet: true });
+    // Difficulty is locked for the whole run (the select is also disabled while
+    // playing or paused); a change only ever applies to the next run.
+    if (running) {
+      difficultyEl.value = runDifficulty;
+      return;
+    }
+    applyDifficulty();
+    persistSettingsLocal({ difficulty: runDifficulty });
+    if (nameSavedThisSession) {
+      pushServerState({ force: true, quiet: true });
+    }
+    announce(`Difficulty set to ${DIFFICULTIES[runDifficulty].label}.`);
+    renderDifficultyTip();
+  });
+
+  // ---- Difficulty tooltip: points per dot + movement rate for each level.
+  // Desktop: hover or keyboard focus on the dropdown / (i) button. Phones: tap
+  // the (i) button or focus the dropdown. Never shown during play.
+  let tipPinned = false;
+  let tipHover = false;
+
+  function blocksPerSecond(tickMs) {
+    const rate = Math.round((1000 / tickMs) * 10) / 10;
+    const text = Number.isInteger(rate) ? String(rate) : rate.toFixed(1);
+    return `${text} block${rate === 1 ? "" : "s"} per second`;
+  }
+
+  function renderDifficultyTip() {
+    const selected = selectedDifficulty();
+    difficultyTip.innerHTML = "";
+    const title = document.createElement("p");
+    title.className = "tip-title";
+    title.textContent = "Points and speed (fixed all game)";
+    const list = document.createElement("ul");
+    Object.entries(DIFFICULTIES).forEach(([key, d]) => {
+      const li = document.createElement("li");
+      li.dataset.difficulty = key;
+      const name = document.createElement("strong");
+      name.textContent = d.label;
+      li.appendChild(name);
+      li.appendChild(document.createTextNode(`: ${d.points} points per dot, ${blocksPerSecond(d.tickMs)}`));
+      if (key === selected) {
+        li.classList.add("is-selected");
+        li.setAttribute("aria-current", "true");
+        const tag = document.createElement("span");
+        tag.className = "tip-selected sr-only";
+        tag.textContent = " (selected)";
+        li.appendChild(tag);
       }
-      announce(`Pace set to ${difficultyEl.value}.`);
+      list.appendChild(li);
+    });
+    difficultyTip.append(title, list);
+  }
+
+  function isLivePlay() {
+    return running && !paused && !gameOver;
+  }
+
+  function positionDifficultyTip() {
+    const margin = 8;
+    const gap = 10;
+    const anchor = difficultyEl.getBoundingClientRect();
+    const vw = document.documentElement.clientWidth || window.innerWidth;
+    const vh = window.innerHeight;
+    difficultyTip.style.maxWidth = `${vw - margin * 2}px`;
+    const tipRect = difficultyTip.getBoundingClientRect();
+    let left = anchor.left + anchor.width / 2 - tipRect.width / 2;
+    left = Math.max(margin, Math.min(left, vw - margin - tipRect.width));
+    // Above the dropdown; only flip below if there is truly no room above.
+    let top = anchor.top - gap - tipRect.height;
+    const below = top < margin && anchor.bottom + gap + tipRect.height <= vh - margin;
+    if (below) {
+      top = anchor.bottom + gap;
+    } else {
+      top = Math.max(margin, top);
+    }
+    difficultyTip.classList.toggle("is-below", below);
+    difficultyTip.style.left = `${Math.round(left)}px`;
+    difficultyTip.style.top = `${Math.round(top)}px`;
+    const arrowX = Math.max(14, Math.min(tipRect.width - 14, anchor.left + anchor.width / 2 - left));
+    difficultyTip.style.setProperty("--arrow-x", `${Math.round(arrowX)}px`);
+  }
+
+  function showDifficultyTip() {
+    if (isLivePlay()) {
+      return;
+    }
+    renderDifficultyTip();
+    difficultyTip.hidden = false;
+    difficultyInfoBtn.setAttribute("aria-expanded", "true");
+    positionDifficultyTip();
+  }
+
+  function hideDifficultyTip() {
+    tipPinned = false;
+    tipHover = false;
+    difficultyTip.hidden = true;
+    difficultyInfoBtn.setAttribute("aria-expanded", "false");
+  }
+
+  function syncDifficultyTip() {
+    const focused = difficultyWrap.contains(document.activeElement) &&
+      document.activeElement !== document.body;
+    if (!isLivePlay() && (tipPinned || tipHover || focused)) {
+      showDifficultyTip();
+    } else {
+      hideDifficultyTip();
+    }
+  }
+
+  [difficultyEl, difficultyInfoBtn, difficultyTip].forEach((el) => {
+    el.addEventListener("pointerenter", (event) => {
+      if (event.pointerType === "mouse") {
+        tipHover = true;
+        syncDifficultyTip();
+      }
+    });
+    el.addEventListener("pointerleave", (event) => {
+      if (event.pointerType === "mouse") {
+        tipHover = false;
+        // Let the pointer cross the gap between the control and the tooltip.
+        setTimeout(() => {
+          if (!tipHover) {
+            syncDifficultyTip();
+          }
+        }, 120);
+      }
+    });
+  });
+  difficultyWrap.addEventListener("focusin", syncDifficultyTip);
+  difficultyWrap.addEventListener("focusout", () => setTimeout(syncDifficultyTip, 0));
+  difficultyInfoBtn.addEventListener("click", (event) => {
+    event.preventDefault();
+    if (isLivePlay()) {
+      return;
+    }
+    if (difficultyTip.hidden || !tipPinned) {
+      tipPinned = true;
+      showDifficultyTip();
+    } else {
+      hideDifficultyTip();
+    }
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (!difficultyTip.hidden && !difficultyWrap.contains(event.target)) {
+      hideDifficultyTip();
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !difficultyTip.hidden) {
+      hideDifficultyTip();
+    }
+  });
+  const repositionTip = () => {
+    if (!difficultyTip.hidden) {
+      positionDifficultyTip();
+    }
+  };
+  window.addEventListener("resize", repositionTip);
+  window.addEventListener("scroll", repositionTip, { passive: true });
+
+  // ---- Settings dialog (display options). Modal: focus is trapped inside,
+  // Escape / backdrop / Close close it, the page behind is inert. Opening it
+  // during play pauses the game; closing it leaves the game paused.
+  const settingsBtn = document.querySelector("#settings-btn");
+  const settingsBackdrop = document.querySelector("#settings-backdrop");
+  const settingsDialog = document.querySelector("#settings-dialog");
+  const settingsCloseBtn = document.querySelector("#settings-close");
+  const optGuide = document.querySelector("#opt-guide");
+  const optMarker = document.querySelector("#opt-marker");
+  const optEagerness = document.querySelectorAll("input[name='opt-eagerness']");
+  let settingsReturnFocus = null;
+
+  function isSettingsOpen() {
+    return !settingsBackdrop.hidden;
+  }
+
+  function syncDisplayUi() {
+    optGuide.checked = display.guide;
+    optMarker.checked = display.marker;
+    optEagerness.forEach((el) => {
+      el.checked = el.value === display.eagerness;
+    });
+    canvas.dataset.turnGuide = display.guide ? "on" : "off";
+    canvas.dataset.turnMarker = display.marker ? "on" : "off";
+    canvas.dataset.eagerness = display.eagerness;
+  }
+
+  function setDisplay(patch) {
+    display = { ...display, ...patch };
+    try {
+      localStorage.setItem(DISPLAY_KEY, JSON.stringify(display));
+    } catch {
+      // Storage full / blocked: the choice still applies for this page.
+    }
+    syncDisplayUi();
+    if (!relaxedActive()) {
+      // Leaving Relaxed mid-tick: settle the open tick now.
+      closeGrace();
+    }
+    // The loop redraws every frame (also while paused), so this shows at once.
+  }
+
+  function settingsFocusables() {
+    return Array.from(settingsDialog.querySelectorAll(
+      "button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex='-1'])"
+    )).filter((el) => el.getClientRects().length > 0);
+  }
+
+  function openSettings() {
+    if (isSettingsOpen()) {
+      return;
+    }
+    if (isLivePlay()) {
+      togglePause();
+    }
+    hideDifficultyTip();
+    settingsReturnFocus = document.activeElement;
+    syncDisplayUi();
+    settingsBackdrop.hidden = false;
+    shellEl.inert = true;
+    rootEl.classList.add("modal-open");
+    settingsBtn.setAttribute("aria-expanded", "true");
+    optGuide.focus({ preventScroll: true });
+  }
+
+  function closeSettings() {
+    if (!isSettingsOpen()) {
+      return;
+    }
+    settingsBackdrop.hidden = true;
+    shellEl.inert = false;
+    rootEl.classList.remove("modal-open");
+    settingsBtn.setAttribute("aria-expanded", "false");
+    const back = settingsReturnFocus && settingsReturnFocus.getClientRects().length > 0
+      ? settingsReturnFocus
+      : settingsBtn.getClientRects().length > 0 ? settingsBtn : canvas;
+    settingsReturnFocus = null;
+    back.focus({ preventScroll: true });
+  }
+
+  syncDisplayUi();
+  settingsBtn.addEventListener("click", openSettings);
+  settingsCloseBtn.addEventListener("click", closeSettings);
+  optGuide.addEventListener("change", () => setDisplay({ guide: optGuide.checked }));
+  optMarker.addEventListener("change", () => setDisplay({ marker: optMarker.checked }));
+  optEagerness.forEach((el) => el.addEventListener("change", () => {
+    if (el.checked) {
+      setDisplay({ eagerness: el.value === "relaxed" ? "relaxed" : "early" });
+    }
+  }));
+  settingsBackdrop.addEventListener("click", (event) => {
+    if (event.target === settingsBackdrop) {
+      closeSettings();
+    }
+  });
+  settingsDialog.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeSettings();
+      return;
+    }
+    if (event.key !== "Tab") {
+      return;
+    }
+    const items = settingsFocusables();
+    if (!items.length) {
+      event.preventDefault();
+      return;
+    }
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+  // Keep focus inside if it ever lands outside the dialog (e.g. a click on
+  // the backdrop edge before it closes).
+  document.addEventListener("focusin", (event) => {
+    if (isSettingsOpen() && !settingsDialog.contains(event.target)) {
+      optGuide.focus({ preventScroll: true });
     }
   });
 
@@ -175,7 +520,7 @@
         ...settings,
         playerName: nameInput.value.trim(),
         muted,
-        difficulty: difficultyEl.value,
+        difficulty: selectedDifficulty(),
         best
       };
 
@@ -296,6 +641,11 @@
   }
 
   document.addEventListener("keydown", (event) => {
+    // The Settings dialog owns the keyboard while it is open (the game is
+    // paused behind it; Space on its Close button must not resume play).
+    if (isSettingsOpen()) {
+      return;
+    }
     // Typing a name (or other form field) must never move/start the snake.
     if (isFormField(event.target)) {
       return;
@@ -328,7 +678,7 @@
     }
 
     if (event.key === " " || event.key === "Enter") {
-      // Start / Restart are button-only; Space/Enter only toggle pause while playing.
+      // Start / End game are button-only; Space/Enter only toggle pause while playing.
       if (!running || gameOver) {
         return;
       }
@@ -349,11 +699,20 @@
     }
   });
 
-  function applyPace() {
-    baseDelay = paceDelays[difficultyEl.value] || 125;
-    if (!running) {
-      moveDelay = baseDelay;
+  function selectedDifficulty() {
+    return normalizeDifficulty(difficultyEl.value);
+  }
+
+  // Lock in the selected difficulty for the next run. No-op mid-run, so the
+  // speed of a game in progress can never change.
+  function applyDifficulty() {
+    if (running) {
+      return;
     }
+    runDifficulty = selectedDifficulty();
+    moveDelay = DIFFICULTIES[runDifficulty].tickMs;
+    canvas.dataset.difficulty = runDifficulty;
+    canvas.dataset.tickMs = String(moveDelay);
   }
 
   function announce(message) {
@@ -395,11 +754,9 @@
     const ok = canStart();
     startBtn.disabled = !ok || saveInFlight;
     overlayStartBtn.disabled = !ok || saveInFlight;
-    restartBtn.disabled = !ok || saveInFlight;
     saveNameBtn.disabled = saveInFlight;
     startBtn.title = ok ? "Start game" : "Save a PG name first";
     overlayStartBtn.title = startBtn.title;
-    restartBtn.title = ok ? "Restart" : "Save a PG name first";
     if (overlay && !overlay.classList.contains("hidden")) {
       const title = overlay.querySelector("h2");
       if (title && (title.textContent === "Press Start" || title.textContent === "Save a name")) {
@@ -424,15 +781,30 @@
     }
     ensureAudio();
 
-    if (gameOver) {
+    if (!running) {
+      // Every Start after an idle board (fresh page, game over or End game)
+      // is a brand-new game.
       reset();
     }
 
+    if (!running) {
+      // Fresh run: lock in difficulty and take the first step on the next frame.
+      applyDifficulty();
+      lastMove = performance.now() - moveDelay;
+    } else if (paused) {
+      lastMove += performance.now() - pausedAt;
+    }
+    const freshRun = !running;
     running = true;
     paused = false;
     pauseBtn.textContent = "Pause";
     setOverlay(null);
     updatePlayState();
+    if (freshRun) {
+      // Size the grid for the in-play layout (phones collapse the setup UI,
+      // freeing height). This is the last moment columns may change.
+      layoutArena({ regrid: true, fresh: true });
+    }
     window.scrollTo(0, 0);
     announce("Game started.");
     beep(520, 0.05, "triangle", 0.03);
@@ -444,6 +816,12 @@
     }
 
     paused = !paused;
+    if (paused) {
+      pausedAt = performance.now();
+    } else {
+      // Resume with the remainder of the interrupted tick, not a free step.
+      lastMove += performance.now() - pausedAt;
+    }
     pauseBtn.textContent = paused ? "Resume" : "Pause";
     setOverlay(paused ? "Paused" : null, paused ? "Press P, Resume, or keep playing." : "");
     announce(paused ? "Paused." : "Resumed.");
@@ -470,12 +848,12 @@
         ? savedNameSnapshot || nameInput.value.trim()
         : (settings.playerName || ""),
       muted,
-      difficulty: difficultyEl.value,
+      difficulty: selectedDifficulty(),
       best,
       ...patch
     };
     const nameCheck = window.SnakeSettings.validatePlayerName(merged.playerName);
-    // Never persist a rejected name from the input box via mute/pace/score saves.
+    // Never persist a rejected name from the input box via mute/difficulty/score saves.
     merged.playerName = nameCheck.ok ? nameCheck.name : (settings.playerName || "");
     settings = window.SnakeSettings.cacheSettings(merged);
     return settings;
@@ -489,7 +867,7 @@
       ...settings,
       playerName: savedNameSnapshot,
       muted,
-      difficulty: difficultyEl.value,
+      difficulty: selectedDifficulty(),
       best
     };
     try {
@@ -584,8 +962,18 @@
         const pts = document.createElement("span");
         pts.className = "board-best";
         pts.textContent = String(p.best);
+        // Difficulty the best score was set on (older entries have none).
+        const diff = document.createElement("span");
+        diff.className = "board-diff";
+        const diffKey = p.bestDifficulty && DIFFICULTIES[p.bestDifficulty] ? p.bestDifficulty : "";
+        if (diffKey) {
+          diff.textContent = DIFFICULTIES[diffKey].label;
+          diff.dataset.difficulty = diffKey;
+          diff.title = `Best set on ${DIFFICULTIES[diffKey].label}`;
+        }
         li.appendChild(rank);
         li.appendChild(name);
+        li.appendChild(diff);
         li.appendChild(pts);
         boardListEl.appendChild(li);
       });
@@ -600,19 +988,28 @@
   }
 
   function reset() {
-    snake = initialSnake.map((part) => ({ ...part }));
+    // A fresh game may pick up a new column count (window resized since).
+    layoutArena({ regrid: true, placing: true });
+    snake = initialSnake();
+    prevSnake = null;
+    eatenFood = null;
+    grace = null;
+    retroBlend = null;
+    lastTickTurned = false;
+    canvas.dataset.lastTurn = "";
     direction = { x: 1, y: 0 };
     turnQueue = [];
     canvas.dataset.heading = headingName(direction);
+    canvas.dataset.head = `${snake[0].x},${snake[0].y}`;
     score = 0;
-    applyPace();
-    moveDelay = baseDelay;
+    ticks = 0;
+    canvas.dataset.ticks = "0";
     running = false;
+    applyDifficulty();
     paused = false;
     gameOver = false;
     beatBestThisRun = false;
     scoreEl.textContent = score;
-    speedEl.textContent = "1";
     bestEl.classList.remove("best-flash");
     overlay.querySelector("p").classList.remove("new-best");
     pauseBtn.textContent = "Pause";
@@ -631,9 +1028,19 @@
   }
 
   function loop(time) {
-    if (running && !paused && time - lastMove > moveDelay) {
-      step();
-      lastMove = time;
+    frameTime = time;
+    if (grace && running && !paused && renderFraction() >= 0.5) {
+      // The drawn head crossed into the logical head's cell: commit the tick.
+      closeGrace();
+    }
+    if (running && !paused) {
+      const elapsed = time - lastMove;
+      if (elapsed >= moveDelay) {
+        step();
+        // Keep a steady cadence (no drift from frame timing); if we fell far
+        // behind (e.g. a background tab), resync instead of bursting steps.
+        lastMove = elapsed < moveDelay * 2 ? lastMove + moveDelay : time;
+      }
     }
 
     foodPulse = reduceMotion ? 0 : (foodPulse + 0.08) % (Math.PI * 2);
@@ -641,64 +1048,176 @@
     requestAnimationFrame(loop);
   }
 
-  function step() {
+  function relaxedActive() {
+    // With reduced motion the head is drawn in its logical cell right away,
+    // so there is no visual lag to make up for: Relaxed acts like Early.
+    return display.eagerness === "relaxed" && !reduceMotion;
+  }
+
+  function snapshot() {
+    return {
+      snake: snake.map((part) => ({ ...part })),
+      direction,
+      food: { ...food },
+      score,
+      prevSnake,
+      eatenFood,
+      head: canvas.dataset.head,
+      heading: canvas.dataset.heading,
+      lastTickTurned
+    };
+  }
+
+  // One game tick. A provisional tick stays correctable during its first half
+  // (the drawn head is still in the cell the tick left): food / best / sound
+  // and a crash are held back (grace.pending) so a retroactive turn can
+  // replace the tick. `retro` re-runs the current tick from its snapshot
+  // (same tick number, no timing change).
+  //
+  // Provisional ticks: every tick in Relaxed mode, and in both modes the tick
+  // right after a turn. The latter fixes wide U-turns: turns apply one per
+  // tick, so if the second press of a double tap arrived just after the next
+  // tick had already moved the head on from the first perpendicular cell, it
+  // used to apply a cell later (an empty lane between trail and return path).
+  // Now it still turns in that first cell while the head is drawn there.
+  function step({ retro = false } = {}) {
+    if (!retro) {
+      closeGrace();
+      if (!running || gameOver) {
+        return;
+      }
+      ticks += 1;
+      canvas.dataset.ticks = String(ticks);
+    }
+    const snap = retro ? grace.snap : snapshot();
+    const provisional = !reduceMotion && (display.eagerness === "relaxed" || snap.lastTickTurned);
+    let turned = false;
     if (turnQueue.length) {
+      const at = snake[0];
       direction = turnQueue.shift();
+      turned = true;
       canvas.dataset.heading = headingName(direction);
+      canvas.dataset.lastTurn = `${at.x},${at.y},${headingName(direction)},${ticks}`;
     }
     const head = {
       x: snake[0].x + direction.x,
       y: snake[0].y + direction.y
     };
+    prevSnake = snake.map((part) => ({ ...part }));
+    eatenFood = null;
+    const pending = { ate: false, died: false };
+    lastTickTurned = turned;
 
-    if (head.x < 0 || head.x >= cells || head.y < 0 || head.y >= cells || hitsSnake(head)) {
+    if (head.x < 0 || head.x >= cols || head.y < 0 || head.y >= rows || hitsSnake(head)) {
+      if (provisional) {
+        // Crash confirmed when the window closes, unless a turn avoids it.
+        pending.died = true;
+        grace = { snap, turned, pending };
+        return;
+      }
       finish();
       return;
     }
 
     snake.unshift(head);
+    canvas.dataset.head = `${head.x},${head.y}`;
 
     if (head.x === food.x && head.y === food.y) {
-      score += 10;
-      scoreEl.textContent = score;
-      moveDelay = Math.max(minDelay, moveDelay - 3);
-      speedEl.textContent = String(speedLevel());
+      score += DIFFICULTIES[runDifficulty].points;
+      eatenFood = { ...food };
       food = placeFood();
-      beep(760, 0.06, "square", 0.035);
-
-      if (score > best) {
-        best = score;
-        bestEl.textContent = best;
-        bestEl.classList.add("best-flash");
-        persistSettingsLocal({ best });
-        pushServerState({ force: true, quiet: true });
-        if (!beatBestThisRun) {
-          beatBestThisRun = true;
-          beep(880, 0.08, "sine", 0.04);
-        }
+      if (provisional) {
+        pending.ate = true;
+      } else {
+        foodEffects();
       }
     } else {
       snake.pop();
     }
+    if (provisional) {
+      grace = { snap, turned, pending };
+    }
   }
 
-  function speedLevel() {
-    return Math.max(1, Math.round((baseDelay - moveDelay) / 3) + 1);
+  // Score display, sound and best for a dot just eaten (score already added).
+  function foodEffects() {
+    scoreEl.textContent = score;
+    beep(760, 0.06, "square", 0.035);
+
+    if (score > best) {
+      best = score;
+      bestEl.textContent = best;
+      bestEl.classList.add("best-flash");
+      persistSettingsLocal({ best, bestDifficulty: runDifficulty });
+      pushServerState({ force: true, quiet: true });
+      if (!beatBestThisRun) {
+        beatBestThisRun = true;
+        beep(880, 0.08, "sine", 0.04);
+      }
+    }
   }
 
-  function finish() {
+  // Relaxed mode: make the open tick final and apply what it held back.
+  function closeGrace() {
+    if (!grace) {
+      return;
+    }
+    const { pending } = grace;
+    grace = null;
+    if (pending.ate) {
+      foodEffects();
+    }
+    if (pending.died) {
+      finish();
+    }
+  }
+
+  // A press can still turn in the cell the head is drawn in: true while a
+  // provisional tick is open, applied no turn, and nothing is queued.
+  function canTurnRetro() {
+    return Boolean(grace) && !grace.turned && turnQueue.length === 0;
+  }
+
+  // Replace the open tick: restore the state before it and re-run it with the
+  // turn applied in the cell the head was leaving. Collision and food are
+  // checked again for the corrected cell; timing and tick count are unchanged.
+  function retroTurn(side) {
+    const s = grace.snap;
+    const from = segmentPosition(0, renderFraction());
+    snake = s.snake.map((part) => ({ ...part }));
+    direction = s.direction;
+    food = { ...s.food };
+    score = s.score;
+    prevSnake = s.prevSnake;
+    eatenFood = s.eatenFood;
+    canvas.dataset.head = s.head;
+    canvas.dataset.heading = s.heading;
+    lastTickTurned = s.lastTickTurned;
+    turnQueue = [rotate(direction, side)];
+    step({ retro: true });
+    retroBlend = reduceMotion ? null : { from, start: performance.now() };
+    canvas.dataset.retroTurns = String(Number(canvas.dataset.retroTurns || 0) + 1);
+  }
+
+  // Game over (crash) or End game. Either way the score already counted:
+  // a new best is saved the moment it is reached during the run.
+  function finish({ ended = false } = {}) {
+    grace = null;
+    lastTickTurned = false;
+    retroBlend = null;
     running = false;
+    paused = false;
     gameOver = true;
     turnQueue = [];
     pauseBtn.textContent = "Pause";
     updatePlayState();
-    beep(180, 0.18, "sawtooth", 0.04);
+    beep(180, ended ? 0.08 : 0.18, "sawtooth", ended ? 0.025 : 0.04);
 
-    const detail = beatBestThisRun
-      ? `New best: ${best}`
-      : "Press Restart to play again.";
-    announce(beatBestThisRun ? `Game over. New best ${best}.` : `Game over. Score ${score}.`);
-    setOverlay("Game Over", detail);
+    const next = "Pick a difficulty and press Start.";
+    const detail = beatBestThisRun ? `New best: ${best}. ${next}` : `Score ${score}. ${next}`;
+    const what = ended ? "Game ended" : "Game over";
+    announce(beatBestThisRun ? `${what}. New best ${best}.` : `${what}. Score ${score}.`);
+    setOverlay(ended ? "Game ended" : "Game Over", detail);
     if (beatBestThisRun) {
       overlay.querySelector("p").classList.add("new-best");
       refreshArcadeBoard();
@@ -708,11 +1227,30 @@
   }
 
   function draw() {
-    ctx.fillStyle = "#0c1013";
+    const boardW = cols * tile;
+    const boardH = rows * tile;
+    // Margin outside the grid (less than one cell wide) is darker, with a thin
+    // edge line so the walls are unambiguous.
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = "#080b0d";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.translate(gridOffsetX, 0);
+    ctx.fillStyle = "#0c1013";
+    ctx.fillRect(0, 0, boardW, boardH);
     drawGrid();
+    if (gridOffsetX >= 2) {
+      ctx.strokeStyle = "rgba(134, 214, 114, 0.28)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(-0.5, -0.5, boardW + 1, boardH + 1);
+    }
 
     const k = drawScale;
+    const preview = turnPreview();
+    publishTurnPreview(preview);
+    if (preview) {
+      drawTurnCells(preview);
+    }
+
     const pulse = reduceMotion ? 0 : Math.sin(foodPulse) * 2 * k;
     ctx.fillStyle = "#f2c94c";
     roundRect(
@@ -724,29 +1262,238 @@
     );
     ctx.fill();
 
-    snake.forEach((part, index) => {
-      ctx.fillStyle = index === 0 ? "#a7f08d" : "#86d672";
-      roundRect(part.x * tile + 3 * k, part.y * tile + 3 * k, tile - 6 * k, tile - 6 * k, 6 * k);
+    const t = renderFraction();
+
+    // The dot just eaten shrinks away as the head slides onto it.
+    if (eatenFood && t < 1) {
+      const size = (tile - 10 * k) * (1 - t);
+      const cx = (eatenFood.x + 0.5) * tile;
+      const cy = (eatenFood.y + 0.5) * tile;
+      ctx.fillStyle = "#f2c94c";
+      roundRect(cx - size / 2, cy - size / 2, size, size, Math.min(7 * k, size / 2));
       ctx.fill();
-    });
+    }
+
+    const seg = tile - 6 * k;
+    const center = (p) => ({ x: (p.x + 0.5) * tile, y: (p.y + 0.5) * tile });
+    let headPos = segmentPosition(0, t);
+    if (retroBlend) {
+      // Ease from where the head was drawn before a retroactive turn onto
+      // its corrected path, instead of jumping.
+      const k = (performance.now() - retroBlend.start) / RETRO_BLEND_MS;
+      if (k >= 1 || !running) {
+        retroBlend = null;
+      } else {
+        const e = 1 - (1 - Math.max(0, k)) ** 2;
+        headPos = {
+          x: retroBlend.from.x + (headPos.x - retroBlend.from.x) * e,
+          y: retroBlend.from.y + (headPos.y - retroBlend.from.y) * e
+        };
+      }
+    }
+    const tailPos = segmentPosition(snake.length - 1, t);
+    // Body: one continuous stroke from the head, through the centre of every
+    // occupied cell (so corners go through the corner cell, never a diagonal),
+    // to the tail end. Each segment only ever moves between adjacent cells.
+    const path = [headPos, ...snake.slice(1), tailPos].map(center);
+    ctx.strokeStyle = "#86d672";
+    ctx.lineWidth = seg;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "butt";
+    ctx.beginPath();
+    ctx.moveTo(path[0].x, path[0].y);
+    for (let i = 1; i < path.length; i += 1) {
+      ctx.lineTo(path[i].x, path[i].y);
+    }
+    ctx.stroke();
+
+    const tailC = center(tailPos);
+    ctx.fillStyle = "#86d672";
+    roundRect(tailC.x - seg / 2, tailC.y - seg / 2, seg, seg, 6 * k);
+    ctx.fill();
+
+    const headC = center(headPos);
+    ctx.fillStyle = "#a7f08d";
+    roundRect(headC.x - seg / 2, headC.y - seg / 2, seg, seg, 6 * k);
+    ctx.fill();
+    if (preview) {
+      drawTurnArrows(preview);
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
   }
 
+  // ---- Turn preview: where a turn takes effect, straight from the game logic.
+  // step() applies at most one queued turn per tick and then moves the head
+  // from its current cell (snake[0]). So the first queued turn happens in
+  // snake[0], the second one cell further along the first new direction, and a
+  // turn pressed now happens in the cell after any queued turns (none if the
+  // queue is full). Only shown during a run; dimmed while paused.
+  function turnPreview() {
+    if (!running || gameOver || !snake) {
+      return null;
+    }
+    if (canTurnRetro()) {
+      // First half of a provisional tick: a press turns in the cell the head
+      // is drawn in (the one the last tick left).
+      const c = grace.snap.snake[0];
+      return { queued: [], next: { x: c.x, y: c.y }, dim: paused };
+    }
+    let pos = { x: snake[0].x, y: snake[0].y };
+    const queued = turnQueue.map((dir) => {
+      const cell = { x: pos.x, y: pos.y, dir };
+      pos = { x: pos.x + dir.x, y: pos.y + dir.y };
+      return cell;
+    });
+    const onBoard = (c) => c.x >= 0 && c.x < cols && c.y >= 0 && c.y < rows;
+    const next = turnQueue.length < maxQueuedTurns && onBoard(pos) ? pos : null;
+    return { queued: queued.filter(onBoard), next, dim: paused };
+  }
+
+  // Exposed as data attributes (only when they change) for tests / debugging.
+  function publishTurnPreview(preview) {
+    const next = preview && preview.next ? `${preview.next.x},${preview.next.y}` : "";
+    const queued = preview
+      ? preview.queued.map((c) => `${c.x},${c.y},${headingName(c.dir)}`).join(";")
+      : "";
+    if (canvas.dataset.turnNext !== next) {
+      canvas.dataset.turnNext = next;
+    }
+    if (canvas.dataset.turnQueued !== queued) {
+      canvas.dataset.turnQueued = queued;
+    }
+    // Which highlight layers this frame actually draws ("guide", "marker").
+    const layers = [];
+    if (preview && display.guide && (preview.next || preview.queued.length)) {
+      layers.push("guide");
+    }
+    if (preview && display.marker && (preview.next || preview.queued.length)) {
+      layers.push("marker");
+    }
+    const drawn = layers.join(" ");
+    if (canvas.dataset.turnLayers !== drawn) {
+      canvas.dataset.turnLayers = drawn;
+    }
+  }
+
+  const TURN_RGB = "108, 198, 255";
+
+  function drawTurnCells(preview) {
+    const k = drawScale;
+    const alpha = preview.dim ? 0.4 : 1;
+    const guideCell = preview.next || preview.queued[preview.queued.length - 1];
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    if (guideCell && display.guide) {
+      // Faint row + column bands through the cell a turn would happen in.
+      ctx.fillStyle = `rgba(${TURN_RGB}, 0.07)`;
+      ctx.fillRect(0, guideCell.y * tile, cols * tile, tile);
+      ctx.fillRect(guideCell.x * tile, 0, tile, rows * tile);
+    }
+    const outline = (c, strength) => {
+      const inset = 1.5 * k;
+      ctx.shadowColor = `rgba(${TURN_RGB}, 0.8)`;
+      ctx.shadowBlur = 6 * k;
+      ctx.strokeStyle = `rgba(${TURN_RGB}, ${strength})`;
+      ctx.lineWidth = Math.max(1.5, 2 * k);
+      roundRect(c.x * tile + inset, c.y * tile + inset, tile - inset * 2, tile - inset * 2, 5 * k);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    };
+    if (!display.marker) {
+      ctx.restore();
+      return;
+    }
+    preview.queued.forEach((c) => outline(c, 0.7));
+    if (preview.next) {
+      ctx.fillStyle = `rgba(${TURN_RGB}, 0.10)`;
+      const inset = 1.5 * k;
+      roundRect(preview.next.x * tile + inset, preview.next.y * tile + inset,
+        tile - inset * 2, tile - inset * 2, 5 * k);
+      ctx.fill();
+      outline(preview.next, 0.9);
+    }
+    ctx.restore();
+  }
+
+  // Small chevron in each queued turn cell pointing the new direction. Drawn
+  // on top of the snake, with a dark under-stroke so it reads on the head too.
+  function drawTurnArrows(preview) {
+    if (!preview.queued.length || !display.marker) {
+      return;
+    }
+    ctx.save();
+    ctx.globalAlpha = preview.dim ? 0.4 : 1;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    preview.queued.forEach((c) => {
+      ctx.save();
+      ctx.translate((c.x + 0.5) * tile, (c.y + 0.5) * tile);
+      ctx.rotate(Math.atan2(c.dir.y, c.dir.x));
+      const a = tile * 0.22;
+      const shape = () => {
+        ctx.beginPath();
+        ctx.moveTo(-a, 0);
+        ctx.lineTo(a * 0.9, 0);
+        ctx.moveTo(a * 0.1, -a * 0.8);
+        ctx.lineTo(a * 0.9, 0);
+        ctx.lineTo(a * 0.1, a * 0.8);
+      };
+      ctx.strokeStyle = "rgba(6, 12, 18, 0.75)";
+      ctx.lineWidth = Math.max(3, tile * 0.2);
+      shape();
+      ctx.stroke();
+      ctx.strokeStyle = `rgb(${TURN_RGB})`;
+      ctx.lineWidth = Math.max(1.5, tile * 0.1);
+      shape();
+      ctx.stroke();
+      ctx.restore();
+    });
+    ctx.restore();
+  }
+
+  // Fraction (0..1) of the current tick that has elapsed, used only to draw
+  // segments between their previous and current cells. Snaps to 1 (grid
+  // positions) before a run, after game over and with reduced motion; frozen
+  // while paused.
+  function renderFraction() {
+    if (reduceMotion || !prevSnake || !running || gameOver) {
+      return 1;
+    }
+    const now = paused ? pausedAt : frameTime;
+    return Math.max(0, Math.min(1, (now - lastMove) / moveDelay));
+  }
+
+  function segmentPosition(index, t) {
+    const cur = snake[index];
+    const prev = prevSnake && prevSnake[index];
+    if (!prev || t >= 1) {
+      return { x: cur.x, y: cur.y };
+    }
+    return { x: prev.x + (cur.x - prev.x) * t, y: prev.y + (cur.y - prev.y) * t };
+  }
+
+  // Grid lines in board coordinates (the caller translates to the grid origin).
   function drawGrid() {
     ctx.strokeStyle = "rgba(255,255,255,0.08)";
     const lineWidth = Math.max(1, Math.round(drawScale));
     // Odd widths need a half-pixel offset to land on whole device pixels.
     const offset = lineWidth % 2 ? 0.5 : 0;
     ctx.lineWidth = lineWidth;
+    const boardW = cols * tile;
+    const boardH = rows * tile;
 
-    for (let i = 1; i < cells; i += 1) {
+    for (let i = 1; i < cols; i += 1) {
       const pos = Math.round(i * tile) + offset;
       ctx.beginPath();
       ctx.moveTo(pos, 0);
-      ctx.lineTo(pos, canvas.height);
+      ctx.lineTo(pos, boardH);
       ctx.stroke();
+    }
+    for (let i = 1; i < rows; i += 1) {
+      const pos = Math.round(i * tile) + offset;
       ctx.beginPath();
       ctx.moveTo(0, pos);
-      ctx.lineTo(canvas.width, pos);
+      ctx.lineTo(boardW, pos);
       ctx.stroke();
     }
   }
@@ -766,8 +1513,8 @@
 
     do {
       candidate = {
-        x: Math.floor(Math.random() * cells),
-        y: Math.floor(Math.random() * cells)
+        x: Math.floor(Math.random() * cols),
+        y: Math.floor(Math.random() * rows)
       };
     } while (snake.some((part) => part.x === candidate.x && part.y === candidate.y));
 
@@ -790,14 +1537,21 @@
     if (!running || paused || gameOver) {
       return;
     }
-    const base = lastPlannedDirection();
-    const next = side === "left"
-      ? { x: base.y, y: -base.x }
-      : { x: -base.y, y: base.x };
+    if (canTurnRetro()) {
+      // The drawn head is still in the cell the last tick left.
+      retroTurn(side);
+      return;
+    }
     if (turnQueue.length >= maxQueuedTurns) {
       return;
     }
-    turnQueue.push(next);
+    turnQueue.push(rotate(lastPlannedDirection(), side));
+  }
+
+  function rotate(base, side) {
+    return side === "left"
+      ? { x: base.y, y: -base.x }
+      : { x: -base.y, y: base.x };
   }
 
   function headingName(dir) {
@@ -811,6 +1565,17 @@
     const playing = running && !paused && !gameOver;
     rootEl.classList.toggle("is-playing", playing);
     rootEl.dataset.state = playing ? "playing" : paused ? "paused" : gameOver ? "over" : "ready";
+    // No difficulty changes while a run is live or paused.
+    const locked = running && !gameOver;
+    difficultyEl.disabled = locked;
+    // End game only makes sense while a run is live or paused.
+    endBtn.disabled = !locked;
+    endBtn.title = locked ? "End this game now" : "No game in progress";
+    difficultyEl.title = locked ? "Difficulty is locked until this run ends" : "";
+    if (playing) {
+      // The tooltip must never cover the board during play.
+      hideDifficultyTip();
+    }
     // Hidden panels change what sits above the arena, so resize right away.
     layoutArena();
   }
@@ -835,11 +1600,15 @@
     return window.innerHeight;
   }
 
-  // Size the square board from the space actually left on screen: width of the
-  // arena slot, and viewport height minus everything above the arena and the
-  // turn buttons / padding below it. Backing store is snapped to a whole number
-  // of device pixels per cell so the grid stays crisp on high-DPR screens.
-  function layoutArena() {
+  // Size the board from the space actually left on screen: width of the arena
+  // slot, and viewport height minus everything above the arena and the turn
+  // buttons / padding below it. The row count is fixed; the cell size comes
+  // from the height (capped so a narrow screen keeps a 24x24 square), and
+  // between games the column count is chosen so the board fills the width.
+  // Mid-run (and on the game-over screen) the columns never change: the board
+  // is only rescaled. Cells are a whole number of device pixels so the grid
+  // stays crisp on high-DPR screens.
+  function layoutArena({ regrid = false, placing = false, fresh = false } = {}) {
     const dpr = Math.max(1, window.devicePixelRatio || 1);
     const slotRect = arenaSlot.getBoundingClientRect();
     const slotTop = slotRect.top + window.scrollY;
@@ -856,25 +1625,55 @@
     const padBottom = parseFloat(shellStyle.paddingBottom) || 0;
     const availH = viewportHeight() - slotTop - belowArena - padBottom;
     const availW = arenaSlot.clientWidth;
-    let cssSize = Math.floor(Math.min(availW, availH, maxArena));
-    cssSize = Math.max(Math.min(minArena, availW), cssSize);
+    const widthPx = Math.max(Math.floor(minArena * dpr), Math.floor(availW * dpr));
+    const heightCap = Math.max(Math.min(minArena, availW), Math.floor(Math.min(availH, maxArena)));
 
-    const tileDevice = Math.max(4, Math.floor((cssSize * dpr) / cells));
-    const devicePx = tileDevice * cells;
-    const finalCss = devicePx / dpr;
+    const allowRegrid = regrid || (!running && !gameOver);
+    let tileDevice;
+    let nextCols = cols;
+    if (allowRegrid) {
+      const squareSide = Math.min(heightCap, availW);
+      tileDevice = Math.max(4, Math.floor((squareSide * dpr) / rows));
+      nextCols = Math.max(minCols, Math.floor(widthPx / tileDevice));
+    } else {
+      tileDevice = Math.max(4, Math.floor(Math.min(widthPx / cols, (heightCap * dpr) / rows)));
+    }
 
-    if (canvas.width !== devicePx) {
-      canvas.width = devicePx;
-      canvas.height = devicePx;
-    }
-    const cssText = `${finalCss}px`;
-    if (canvasWrap.style.width !== cssText) {
-      canvasWrap.style.width = cssText;
-      canvasWrap.style.height = cssText;
-      stageEl.style.setProperty("--arena-size", cssText);
-    }
+    const colsChanged = nextCols !== cols;
+    cols = nextCols;
     tile = tileDevice;
     drawScale = tile / designTile;
+    const boardDevW = cols * tile;
+    const canvasW = Math.max(boardDevW, widthPx);
+    const canvasH = rows * tile;
+    gridOffsetX = Math.floor((canvasW - boardDevW) / 2);
+
+    if (canvas.width !== canvasW || canvas.height !== canvasH) {
+      canvas.width = canvasW;
+      canvas.height = canvasH;
+    }
+    const cssW = `${canvasW / dpr}px`;
+    const cssH = `${canvasH / dpr}px`;
+    if (canvasWrap.style.width !== cssW || canvasWrap.style.height !== cssH) {
+      canvasWrap.style.width = cssW;
+      canvasWrap.style.height = cssH;
+      stageEl.style.setProperty("--arena-size", cssW);
+    }
+    canvas.dataset.cols = String(cols);
+    canvas.dataset.rows = String(rows);
+    canvas.dataset.tile = String(tile);
+    canvas.dataset.offsetX = String(gridOffsetX);
+
+    // Before a run starts (or at the instant it starts, sized for the in-play
+    // layout), a new column count re-centres the snake and moves food that
+    // would now be off the board. (reset() does its own placing.)
+    if (colsChanged && !placing && snake && (fresh || (!running && !gameOver))) {
+      snake = initialSnake();
+      prevSnake = null;
+      if (!food || food.x >= cols || snake.some((p) => p.x === food.x && p.y === food.y)) {
+        food = placeFood();
+      }
+    }
     if (snake && food) {
       draw();
     }

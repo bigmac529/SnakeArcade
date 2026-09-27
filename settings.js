@@ -9,6 +9,37 @@
 
   let knownRevision = null;
 
+  const DIFFICULTIES = ["easy", "normal", "hard"];
+
+  // "fast" was the top option of the old Pace control; it is now "hard".
+  // Anything unknown falls back to "normal".
+  function normalizeDifficulty(value) {
+    const v = String(value || "").toLowerCase();
+    if (v === "fast") {
+      return "hard";
+    }
+    return DIFFICULTIES.includes(v) ? v : "normal";
+  }
+
+  function normalizeBestDifficulty(value) {
+    const v = String(value || "").toLowerCase();
+    if (v === "fast") {
+      return "hard";
+    }
+    return DIFFICULTIES.includes(v) ? v : undefined;
+  }
+
+  function normalizeStored(settings) {
+    const next = { ...settings, difficulty: normalizeDifficulty(settings.difficulty) };
+    const bestDifficulty = normalizeBestDifficulty(settings.bestDifficulty);
+    if (bestDifficulty) {
+      next.bestDifficulty = bestDifficulty;
+    } else {
+      delete next.bestDifficulty;
+    }
+    return next;
+  }
+
   function defaultSettings() {
     return {
       version: 1,
@@ -21,10 +52,10 @@
   }
 
   function writeLocalCache(settings) {
-    const next = {
+    const next = normalizeStored({
       ...defaultSettings(),
       ...settings
-    };
+    });
     if (!next.updatedAt) {
       next.updatedAt = new Date().toISOString();
     }
@@ -41,7 +72,7 @@
         raw = localStorage.getItem(LEGACY_SETTINGS_KEY);
       }
       if (raw) {
-        return { ...defaultSettings(), ...JSON.parse(raw) };
+        return normalizeStored({ ...defaultSettings(), ...JSON.parse(raw) });
       }
     } catch (_) {
       /* fall through */
@@ -152,7 +183,7 @@
   }
 
   /**
-   * Persist name + mute/pace/best to server.
+   * Persist name + mute/difficulty/best to server.
    * options.force — overwrite/claim existing name
    * options.baseRevision — optimistic concurrency token
    * Retries once on lock_busy.
@@ -171,9 +202,14 @@
     const payload = {
       playerName: nameCheck.name,
       muted: Boolean(settings.muted),
-      difficulty: settings.difficulty || "normal",
+      difficulty: normalizeDifficulty(settings.difficulty),
       best: Number(settings.best || 0)
     };
+    // Difficulty the best score was set on (shown on the arcade board).
+    const bestDifficulty = normalizeBestDifficulty(settings.bestDifficulty);
+    if (bestDifficulty) {
+      payload.bestDifficulty = bestDifficulty;
+    }
     if (options.force) {
       payload.force = true;
     }
@@ -273,6 +309,10 @@
         };
         delete merged._missing;
         delete merged.revision;
+        // The best score came from the server, so its difficulty tag must too.
+        if (!serverSettings.bestDifficulty) {
+          delete merged.bestDifficulty;
+        }
         return writeLocalCache(merged);
       }
 
@@ -299,6 +339,7 @@
     cacheSettings,
     validatePlayerName,
     defaultSettings,
+    normalizeDifficulty,
     hydrateFromServer,
     saveToServer,
     fetchPlayers,

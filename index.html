@@ -16,7 +16,10 @@
           <p class="eyebrow">HTML5 Canvas</p>
           <h1>SnakeArcade <span class="title-snake" aria-hidden="true">🐍</span></h1>
         </div>
-        <a class="developer-link" href="https://socha3.com">Meet the developer</a>
+        <nav class="top-links" aria-label="Links">
+          <a class="developer-link" href="https://socha3.com">Meet the developer</a>
+          <a class="developer-link source-link" id="source-link" href="https://github.com/bigmac529/SnakeArcade" target="_blank" rel="noopener noreferrer">View source on GitHub</a>
+        </nav>
         <div class="scoreboard" aria-label="Scoreboard">
           <div>
             <span>Score</span>
@@ -25,10 +28,6 @@
           <div>
             <span>Best</span>
             <strong id="best">0</strong>
-          </div>
-          <div>
-            <span>Speed</span>
-            <strong id="speed">1</strong>
           </div>
         </div>
       </div>
@@ -50,21 +49,28 @@
         <div class="controls">
           <button id="start" type="button">Start</button>
           <button id="pause" type="button">Pause</button>
-          <button id="restart" type="button">Restart</button>
+          <button id="end-game" type="button" disabled>End game</button>
           <button id="mute" type="button" aria-pressed="false" title="Toggle sound">Sound: On</button>
         </div>
-        <label class="difficulty">
-          <span>Pace</span>
-          <select id="difficulty" aria-label="Starting pace">
+        <div class="difficulty">
+          <label class="difficulty-label" for="difficulty">Difficulty</label>
+          <button class="info-btn" id="difficulty-info" type="button" aria-label="Difficulty details" aria-describedby="difficulty-tip" aria-expanded="false" aria-controls="difficulty-tip">i</button>
+          <select id="difficulty" aria-label="Difficulty" aria-describedby="difficulty-tip">
             <option value="easy">Easy</option>
             <option value="normal" selected>Normal</option>
-            <option value="fast">Fast</option>
+            <option value="hard">Hard</option>
           </select>
-        </label>
+          <!-- Filled from DIFFICULTIES in game.js so it always matches the real speeds/points. -->
+          <div class="difficulty-tip" id="difficulty-tip" role="tooltip" hidden></div>
+        </div>
+        <button class="settings-btn" id="settings-btn" type="button" aria-haspopup="dialog" aria-controls="settings-dialog" aria-expanded="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span>Settings</span>
+        </button>
       </div>
 
       <p class="help" id="help">
-        Turn: on-screen Left / Right, or <kbd>←</kbd> / <kbd>→</kbd> or <kbd>A</kbd> / <kbd>D</kbd> (relative to the snake) · Pause: <kbd>P</kbd> / Space · Sound: <kbd>M</kbd> · Start: after Save name
+        Turn: on-screen Left / Right, or <kbd>←</kbd> / <kbd>→</kbd> or <kbd>A</kbd> / <kbd>D</kbd> (relative to the snake) · Pause: <kbd>P</kbd> / Space · Sound: <kbd>M</kbd> · Start: after Save name · End game: stops the run · Difficulty: pick before Start · Double tap = tight U-turn · Settings (gear): turn guide, turn cell marker, turn eagerness
       </p>
       <div id="status" class="sr-only" aria-live="polite"></div>
 
@@ -101,6 +107,50 @@
       </div>
     </section>
   </main>
+
+  <!-- Settings dialog. Per-browser preferences (localStorage), not sent to the server. -->
+  <div class="modal-backdrop" id="settings-backdrop" hidden>
+    <div class="modal" id="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title" aria-describedby="settings-desc">
+      <h2 id="settings-title">Settings</h2>
+      <p class="modal-desc" id="settings-desc">Turn highlight and turn timing. Changes apply right away and are saved in this browser.</p>
+      <div class="switch-list">
+        <div class="switch-row">
+          <label for="opt-guide">
+            <span class="switch-title">Row/column guide</span>
+            <span class="switch-hint" id="opt-guide-hint">Faint row and column bands through the turn cell.</span>
+          </label>
+          <input class="switch" id="opt-guide" type="checkbox" role="switch" aria-describedby="opt-guide-hint" checked>
+        </div>
+        <div class="switch-row">
+          <label for="opt-marker">
+            <span class="switch-title">Turn cell marker</span>
+            <span class="switch-hint" id="opt-marker-hint">Outlines the cell where a turn pressed now takes effect, plus arrows on queued turns.</span>
+          </label>
+          <input class="switch" id="opt-marker" type="checkbox" role="switch" aria-describedby="opt-marker-hint" checked>
+        </div>
+      </div>
+      <fieldset class="choice-group">
+        <legend>Turn eagerness</legend>
+        <label class="choice" for="opt-eager-early">
+          <input id="opt-eager-early" type="radio" name="opt-eagerness" value="early" checked>
+          <span class="choice-text">
+            <span class="switch-title">Early (current)</span>
+            <span class="switch-hint">A press turns in the cell the head is moving into.</span>
+          </span>
+        </label>
+        <label class="choice" for="opt-eager-relaxed">
+          <input id="opt-eager-relaxed" type="radio" name="opt-eagerness" value="relaxed">
+          <span class="choice-text">
+            <span class="switch-title">Relaxed</span>
+            <span class="switch-hint">A press still turns in the cell the head is drawn in, until the head crosses into the next cell.</span>
+          </span>
+        </label>
+      </fieldset>
+      <div class="modal-actions">
+        <button id="settings-close" type="button">Close</button>
+      </div>
+    </div>
+  </div>
 
   <script src="settings.js"></script>
   <script src="game.js"></script>

@@ -19,7 +19,53 @@ Dev script is the same entrypoint: `npm run dev`.
 
 ## Controls
 
-**Start** (or the **Start game** button on the board) is the only way to begin a run, and it needs a saved PG name this session. Taps, key presses, and the turn buttons never start a game.
+**Start** (or the **Start game** button on the board) is the only way to begin a run, and it needs a saved PG name this session. Every Start begins a fresh game. Taps, key presses, and the turn buttons never start a game.
+
+**End game** (formerly Restart) stops the current run right away, whether it is playing or paused, exactly like a game over. It does not restart: the Difficulty dropdown unlocks, and you press **Start** to play again. Scores count the same as a crash game over (a new best is saved the moment you reach it during the run). **End game** is disabled when no run is active. On phones the toolbar is hidden during play, so press **Pause** first, then **End game**.
+
+### Turn highlight
+
+During a run, the cell where a turn pressed now would happen is outlined in blue, with faint row and column bands through it. That cell is the one the head is gliding into, because the next tick applies the turn and moves the head out of that cell in the new direction. Each queued turn (up to two) is marked in its cell with a small blue arrow for the new direction, and a new press would then apply one cell further along. The highlight dims while paused and is hidden before Start and after the game ends. It sits under the food and uses blue, not the food's yellow. It follows the game logic exactly, including with reduced motion, and it follows the Turn eagerness setting (below).
+
+Right after a turn, the marker stays on the first cell of the new direction until the drawn head leaves it. A second press during that time still turns in that cell (see **Tight U-turns** below).
+
+### Settings
+
+The **Settings** button (gear icon) in the toolbar opens a dialog with:
+
+- **Row/column guide** (switch, on by default): shows or hides the faint row and column bands through the turn cell.
+- **Turn cell marker** (switch, on by default): shows or hides the outlined cell where a turn pressed now takes effect, plus the arrows on queued turns.
+- **Turn eagerness** (choice, default **Early (current)**):
+  - **Early:** a press turns in the cell the head is moving into, which is the logical head. Because drawing lags the logic by up to one tick, this is one cell ahead of the drawn head for the first half of each tick.
+  - **Relaxed:** a press turns in the cell the head is *drawn* in, right up until the drawn head's centre crosses into the next cell. For the first half of each tick, the tick is provisional. A press then re-runs that tick from the state before it, with the turn applied in the cell the head was leaving. Collision and food are checked again for the corrected cell, and the tick count and timing do not change. A dot eaten or a crash in a provisional tick only counts when the window closes (half a tick later), so there is no score flicker and no missed or unfair crash. The head eases onto the corrected path over about 100 ms instead of jumping. With reduced motion there is no drawing lag, so Relaxed acts like Early.
+
+Changes apply right away, including while paused. They are saved per browser in `localStorage` (key `snakearcade.prefs.v1`), not on the server, so they are not tied to the player name and the settings API is unchanged. The guide and marker switches only change the drawing.
+
+The dialog is modal: focus stays inside it, and **Escape**, a click on the backdrop, or **Close** closes it. Opening Settings during play pauses the game, and closing it leaves the game paused (press Resume or P to continue). On phones the toolbar is hidden during play, so Settings is available before Start, when paused and after a game.
+
+### Difficulty
+
+Pick **Difficulty** before you press **Start**. The snake moves at one fixed speed for the whole run. It never speeds up over time or as your score grows.
+
+| Difficulty | Tick (ms per block) | Speed | Points per dot |
+| --- | --- | --- | --- |
+| Easy | 256 | 3.9 blocks per second | 5 |
+| Normal (default) | 128 | 7.8 blocks per second | 10 |
+| Hard | 64 | 15.6 blocks per second | 20 |
+
+The values live in `DIFFICULTIES` at the top of `game.js`. Hover or focus the dropdown, or tap the small **i** button next to it (phones), to see a tooltip with the points per dot and speed of each level, with the current choice highlighted. The tooltip text is built from `DIFFICULTIES`, so it always matches the real numbers. It never opens during a live run.
+
+The dropdown is disabled while a run is live or paused. A change applies from the next **Start**, so it can never change the speed of a game in progress. Saved settings from the old **Pace** control carry over: `easy` and `normal` stay the same, and `fast` becomes **Hard**.
+
+### Board size
+
+The board always has 24 rows and square cells. The cell size comes from the height left on screen (capped so a board narrower than it is tall stays a 24x24 square). Columns are then added until the board fills the full width of its column: beside the Arcade board on desktop, the full screen width on phones. For example, 1280x800 gives 42x24 with 16 px cells, and a 390x844 phone gives 24x24. The canvas spans the exact container width. Any leftover of less than one cell is split into a thin, darker margin with an edge line, so the walls stay clear.
+
+The column count is chosen only between games: when a run starts (sized for the in-play layout, which on phones hides the setup panels) and when a new game is reset. Resizing or rotating during a run only rescales the drawing, and the game-over screen keeps the run's grid. Food spawning and wall collisions use the current column and row counts. Scores from different grid sizes share one leaderboard.
+
+### Smooth movement
+
+Game logic runs on the fixed grid tick above: turns, eating, growth, collisions and scoring all happen once per tick, cell by cell. Only the drawing is smooth. Each animation frame (`requestAnimationFrame`) draws the snake part-way between its previous and current cells, based on how much of the tick has passed, so it glides instead of jumping. The body is drawn as one path through the centre of each occupied cell, so turns go around the corner cell rather than cutting diagonally. The picture trails the game state by less than one tick. Pause freezes the snake mid-glide, game over shows the exact final cells, and with the OS "reduce motion" setting the snake snaps from cell to cell as before.
 
 ### Phone / touch: two buttons
 
@@ -28,6 +74,7 @@ Dev script is the same entrypoint: `npm run dev`.
 - Turns are relative to the snake, not the screen: a snake moving down that gets **Left** turns to screen-right.
 - The buttons react on touch-down (no 300 ms tap delay, no double-tap zoom, no text selection or long-press menu).
 - Each tick applies one turn, and up to two quick taps are queued. Two fast **Right** taps make a clean U-turn over two ticks, never an instant reversal into your own body.
+- **Tight U-turns:** a double tap always makes the tightest U-turn. The snake moves exactly one cell sideways and comes back in the lane right beside its trail. After a turn, the next tick stays correctable while the head is still drawn in that first sideways cell, in both eagerness modes. A second press that arrives just after that tick has already moved the head on still turns in the first sideways cell, not one cell later. Before this, a second press landing just after the next tick made a U-turn one lane too wide, which happened most on Hard (64 ms per cell).
 - Swiping and the old D-pad are gone.
 
 While a run is live on a phone, the name panel, extra buttons, and Arcade board are hidden. That leaves the score, **Pause**, the board, and the two turn buttons (at the bottom, in thumb reach) on one screen with no scrolling. **Pause** (or a game over) brings everything back. Held sideways, the buttons sit on either side of the board.
@@ -67,20 +114,23 @@ While a run is live on a phone, the name panel, extra buttons, and Arcade board 
 
 ## Player settings & Arcade board
 
-Enter a PG player name (2+ characters) and tap **Save name**. That writes name + mute/pace/best to `data/settings.json` via `PUT /api/settings`. Guest / empty names cannot start.
+(The turn-highlight display options in the **Settings** dialog are separate: they are saved in this browser only, see [Settings](#settings).)
+
+Enter a PG player name (2+ characters) and tap **Save name**. That writes name + mute/difficulty/best to `data/settings.json` via `PUT /api/settings`. Guest / empty names cannot start.
 
 If the name already exists on the server, the UI asks for confirmation (shows the existing best score) and only overwrites after you confirm (`force: true`).
 
-Changing the name input clears the session “saved” flag until you save again. Start / overlay Start / Restart stay disabled until a successful save this session.
+Changing the name input clears the session “saved” flag until you save again. Start / overlay Start stay disabled until a successful save this session.
 
-The **Arcade board** panel lists all players sorted by best score (desc). It refreshes on load, after save, and when a new best is synced.
+The **Arcade board** panel lists all players sorted by best score (desc), with a small tag showing the difficulty the best was set on (older entries saved before this feature have no tag). It refreshes on load, after save, and when a new best is synced.
 
 ### API
 
 - `GET /api/health` → `{ ok, app, node, port, time }`
-- `GET /api/players` → `{ revision, players: [{ playerName, best, updatedAt, key }] }` sorted by best
+- `GET /api/players` → `{ revision, players: [{ playerName, best, bestDifficulty?, updatedAt, key }] }` sorted by best
 - `GET /api/settings?player=` → one player record (+ `revision`)
-- `PUT /api/settings` body: `{ playerName, muted, difficulty, best, force?, baseRevision? }`
+- `PUT /api/settings` body: `{ playerName, muted, difficulty, best, bestDifficulty?, force?, baseRevision? }`
+  - `difficulty` / `bestDifficulty`: `easy` | `normal` | `hard`. The legacy value `fast` is still accepted and stored as `hard`. If `bestDifficulty` is omitted, the previous tag is kept unless `best` changed.
   - `400` `{ error: "playerName_rejected", message }` — PG / validation reject
   - `409` `{ error: "name_exists", existing, revision }` — name taken and `force` not set
   - `409` `{ error: "revision_conflict" | "lock_busy", revision }` — concurrency
@@ -98,6 +148,7 @@ Store shape:
       "muted": false,
       "difficulty": "normal",
       "best": 120,
+      "bestDifficulty": "hard",
       "updatedAt": "2026-09-13T12:00:00.000Z"
     }
   }

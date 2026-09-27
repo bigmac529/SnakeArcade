@@ -191,6 +191,30 @@ function normalizePlayerKey(name) {
   return cleaned || "_guest";
 }
 
+const DIFFICULTIES = ["easy", "normal", "hard"];
+
+// "fast" is the old name of "hard" (the former Pace option); older clients and
+// stored records may still use it. Returns null for anything unknown.
+function normalizeDifficulty(value) {
+  const v = String(value || "").toLowerCase();
+  if (v === "fast") {
+    return "hard";
+  }
+  return DIFFICULTIES.includes(v) ? v : null;
+}
+
+// Present a stored record with current difficulty names.
+function presentPlayer(p) {
+  const out = { ...p, difficulty: normalizeDifficulty(p.difficulty) || "normal" };
+  const bestDifficulty = normalizeDifficulty(p.bestDifficulty);
+  if (bestDifficulty) {
+    out.bestDifficulty = bestDifficulty;
+  } else {
+    delete out.bestDifficulty;
+  }
+  return out;
+}
+
 function defaultPlayerSettings(playerName = "") {
   return {
     version: 1,
@@ -205,12 +229,19 @@ function defaultPlayerSettings(playerName = "") {
 function playersList(store) {
   return Object.entries(store.players || {})
     .filter(([key, p]) => key !== "_guest" && p && p.playerName)
-    .map(([key, p]) => ({
-      playerName: p.playerName,
-      best: Number(p.best || 0),
-      updatedAt: p.updatedAt || null,
-      key
-    }))
+    .map(([key, p]) => {
+      const row = {
+        playerName: p.playerName,
+        best: Number(p.best || 0),
+        updatedAt: p.updatedAt || null,
+        key
+      };
+      const bestDifficulty = normalizeDifficulty(p.bestDifficulty);
+      if (bestDifficulty) {
+        row.bestDifficulty = bestDifficulty;
+      }
+      return row;
+    })
     .sort((a, b) => b.best - a.best || String(a.playerName).localeCompare(String(b.playerName)));
 }
 
@@ -247,7 +278,7 @@ app.get("/api/settings", (req, res) => {
       revision: store.revision
     });
   }
-  return res.json({ ...found, revision: store.revision });
+  return res.json({ ...presentPlayer(found), revision: store.revision });
 });
 
 app.put("/api/settings", (req, res) => {
@@ -303,9 +334,10 @@ app.put("/api/settings", (req, res) => {
         ...(previous || {}),
         playerName: safeName,
         muted: Boolean(body.muted),
-        difficulty: ["easy", "normal", "fast"].includes(body.difficulty)
-          ? body.difficulty
-          : (previous && previous.difficulty) || "normal",
+        difficulty:
+          normalizeDifficulty(body.difficulty) ||
+          normalizeDifficulty(previous && previous.difficulty) ||
+          "normal",
         best: Number.isFinite(Number(body.best))
           ? Number(body.best)
           : Number((previous && previous.best) || 0),
@@ -314,6 +346,22 @@ app.put("/api/settings", (req, res) => {
       };
       delete saved._missing;
       delete saved.revision;
+
+      // Optional: difficulty the best score was set on. Clients that don't send
+      // it keep the previous tag, unless the best score itself changed.
+      const bestDifficulty = normalizeDifficulty(body.bestDifficulty);
+      if (bestDifficulty) {
+        saved.bestDifficulty = bestDifficulty;
+      } else if (!previous || saved.best !== Number(previous.best || 0)) {
+        delete saved.bestDifficulty;
+      } else if (saved.bestDifficulty) {
+        const kept = normalizeDifficulty(saved.bestDifficulty);
+        if (kept) {
+          saved.bestDifficulty = kept;
+        } else {
+          delete saved.bestDifficulty;
+        }
+      }
 
       store.players[key] = saved;
       store.revision = Number(store.revision || 0) + 1;
