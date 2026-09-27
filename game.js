@@ -3,7 +3,6 @@
   const ctx = canvas.getContext("2d");
   const scoreEl = document.querySelector("#score");
   const bestEl = document.querySelector("#best");
-  const speedEl = document.querySelector("#speed");
   const overlay = document.querySelector("#overlay");
   const startBtn = document.querySelector("#start");
   const pauseBtn = document.querySelector("#pause");
@@ -35,15 +34,20 @@
     { x: 10, y: 12 },
     { x: 9, y: 12 }
   ];
-  const paceDelays = { easy: 160, normal: 125, fast: 95 };
-  const minDelay = 68;
+  // Fixed tick interval (ms per block) and points per food dot. The speed never
+  // changes during a run: no ramp-up with time or score.
+  const DIFFICULTIES = {
+    easy: { label: "Easy", tickMs: 1000, points: 5 },
+    normal: { label: "Normal", tickMs: 500, points: 10 },
+    hard: { label: "Hard", tickMs: 250, points: 20 }
+  };
+  const normalizeDifficulty = window.SnakeSettings.normalizeDifficulty;
 
   const nameInput = document.querySelector("#player-name");
   const nameHint = document.querySelector("#name-hint");
   const saveNameBtn = document.querySelector("#save-settings");
 
   let settings = window.SnakeSettings.loadSettings();
-  let baseDelay = paceDelays[settings.difficulty] || paceDelays[difficultyEl.value] || 125;
   let nameSavedThisSession = false;
   let savedNameSnapshot = "";
   let saveInFlight = false;
@@ -60,7 +64,12 @@
   let paused = false;
   let gameOver = false;
   let lastMove = 0;
-  let moveDelay = baseDelay;
+  let pausedAt = 0;
+  let ticks = 0;
+  // Difficulty of the current / next run. Locked in when a run starts and never
+  // changed while it is in progress.
+  let runDifficulty = normalizeDifficulty(settings.difficulty);
+  let moveDelay = DIFFICULTIES[runDifficulty].tickMs;
   let foodPulse = 0;
   let muted = Boolean(settings.muted);
   let audioCtx = null;
@@ -72,16 +81,18 @@
     best = Number(next.best || 0);
     muted = Boolean(next.muted);
     bestEl.textContent = best;
-    difficultyEl.value = next.difficulty in paceDelays ? next.difficulty : "normal";
+    if (!running) {
+      difficultyEl.value = normalizeDifficulty(next.difficulty);
+    }
     nameInput.value = next.playerName || "";
     updateMuteUi();
-    applyPace();
+    applyDifficulty();
     applyName(next.playerName || "", { silent: true, persist: false });
     updateStartGateUi();
   }
 
   bestEl.textContent = best;
-  difficultyEl.value = settings.difficulty in paceDelays ? settings.difficulty : "normal";
+  difficultyEl.value = runDifficulty;
   nameInput.value = settings.playerName || "";
   updateMuteUi();
   applyName(settings.playerName || "", { silent: true, persist: false });
@@ -125,15 +136,18 @@
     canvas.focus({ preventScroll: true });
   });
   difficultyEl.addEventListener("change", () => {
-    if (!running) {
-      applyPace();
-      speedEl.textContent = "1";
-      persistSettingsLocal({ difficulty: difficultyEl.value });
-      if (nameSavedThisSession) {
-        pushServerState({ force: true, quiet: true });
-      }
-      announce(`Pace set to ${difficultyEl.value}.`);
+    // Difficulty is locked for the whole run (the select is also disabled while
+    // playing or paused); a change only ever applies to the next run.
+    if (running) {
+      difficultyEl.value = runDifficulty;
+      return;
     }
+    applyDifficulty();
+    persistSettingsLocal({ difficulty: runDifficulty });
+    if (nameSavedThisSession) {
+      pushServerState({ force: true, quiet: true });
+    }
+    announce(`Difficulty set to ${DIFFICULTIES[runDifficulty].label}.`);
   });
 
   nameInput.addEventListener("input", () => {
@@ -175,7 +189,7 @@
         ...settings,
         playerName: nameInput.value.trim(),
         muted,
-        difficulty: difficultyEl.value,
+        difficulty: selectedDifficulty(),
         best
       };
 
@@ -349,11 +363,20 @@
     }
   });
 
-  function applyPace() {
-    baseDelay = paceDelays[difficultyEl.value] || 125;
-    if (!running) {
-      moveDelay = baseDelay;
+  function selectedDifficulty() {
+    return normalizeDifficulty(difficultyEl.value);
+  }
+
+  // Lock in the selected difficulty for the next run. No-op mid-run, so the
+  // speed of a game in progress can never change.
+  function applyDifficulty() {
+    if (running) {
+      return;
     }
+    runDifficulty = selectedDifficulty();
+    moveDelay = DIFFICULTIES[runDifficulty].tickMs;
+    canvas.dataset.difficulty = runDifficulty;
+    canvas.dataset.tickMs = String(moveDelay);
   }
 
   function announce(message) {
@@ -428,6 +451,13 @@
       reset();
     }
 
+    if (!running) {
+      // Fresh run: lock in difficulty and take the first step on the next frame.
+      applyDifficulty();
+      lastMove = performance.now() - moveDelay;
+    } else if (paused) {
+      lastMove += performance.now() - pausedAt;
+    }
     running = true;
     paused = false;
     pauseBtn.textContent = "Pause";
@@ -444,6 +474,12 @@
     }
 
     paused = !paused;
+    if (paused) {
+      pausedAt = performance.now();
+    } else {
+      // Resume with the remainder of the interrupted tick, not a free step.
+      lastMove += performance.now() - pausedAt;
+    }
     pauseBtn.textContent = paused ? "Resume" : "Pause";
     setOverlay(paused ? "Paused" : null, paused ? "Press P, Resume, or keep playing." : "");
     announce(paused ? "Paused." : "Resumed.");
@@ -470,12 +506,12 @@
         ? savedNameSnapshot || nameInput.value.trim()
         : (settings.playerName || ""),
       muted,
-      difficulty: difficultyEl.value,
+      difficulty: selectedDifficulty(),
       best,
       ...patch
     };
     const nameCheck = window.SnakeSettings.validatePlayerName(merged.playerName);
-    // Never persist a rejected name from the input box via mute/pace/score saves.
+    // Never persist a rejected name from the input box via mute/difficulty/score saves.
     merged.playerName = nameCheck.ok ? nameCheck.name : (settings.playerName || "");
     settings = window.SnakeSettings.cacheSettings(merged);
     return settings;
@@ -489,7 +525,7 @@
       ...settings,
       playerName: savedNameSnapshot,
       muted,
-      difficulty: difficultyEl.value,
+      difficulty: selectedDifficulty(),
       best
     };
     try {
@@ -584,8 +620,18 @@
         const pts = document.createElement("span");
         pts.className = "board-best";
         pts.textContent = String(p.best);
+        // Difficulty the best score was set on (older entries have none).
+        const diff = document.createElement("span");
+        diff.className = "board-diff";
+        const diffKey = p.bestDifficulty && DIFFICULTIES[p.bestDifficulty] ? p.bestDifficulty : "";
+        if (diffKey) {
+          diff.textContent = DIFFICULTIES[diffKey].label;
+          diff.dataset.difficulty = diffKey;
+          diff.title = `Best set on ${DIFFICULTIES[diffKey].label}`;
+        }
         li.appendChild(rank);
         li.appendChild(name);
+        li.appendChild(diff);
         li.appendChild(pts);
         boardListEl.appendChild(li);
       });
@@ -605,14 +651,14 @@
     turnQueue = [];
     canvas.dataset.heading = headingName(direction);
     score = 0;
-    applyPace();
-    moveDelay = baseDelay;
+    ticks = 0;
+    canvas.dataset.ticks = "0";
     running = false;
+    applyDifficulty();
     paused = false;
     gameOver = false;
     beatBestThisRun = false;
     scoreEl.textContent = score;
-    speedEl.textContent = "1";
     bestEl.classList.remove("best-flash");
     overlay.querySelector("p").classList.remove("new-best");
     pauseBtn.textContent = "Pause";
@@ -631,9 +677,14 @@
   }
 
   function loop(time) {
-    if (running && !paused && time - lastMove > moveDelay) {
-      step();
-      lastMove = time;
+    if (running && !paused) {
+      const elapsed = time - lastMove;
+      if (elapsed >= moveDelay) {
+        step();
+        // Keep a steady cadence (no drift from frame timing); if we fell far
+        // behind (e.g. a background tab), resync instead of bursting steps.
+        lastMove = elapsed < moveDelay * 2 ? lastMove + moveDelay : time;
+      }
     }
 
     foodPulse = reduceMotion ? 0 : (foodPulse + 0.08) % (Math.PI * 2);
@@ -642,6 +693,8 @@
   }
 
   function step() {
+    ticks += 1;
+    canvas.dataset.ticks = String(ticks);
     if (turnQueue.length) {
       direction = turnQueue.shift();
       canvas.dataset.heading = headingName(direction);
@@ -659,10 +712,8 @@
     snake.unshift(head);
 
     if (head.x === food.x && head.y === food.y) {
-      score += 10;
+      score += DIFFICULTIES[runDifficulty].points;
       scoreEl.textContent = score;
-      moveDelay = Math.max(minDelay, moveDelay - 3);
-      speedEl.textContent = String(speedLevel());
       food = placeFood();
       beep(760, 0.06, "square", 0.035);
 
@@ -670,7 +721,7 @@
         best = score;
         bestEl.textContent = best;
         bestEl.classList.add("best-flash");
-        persistSettingsLocal({ best });
+        persistSettingsLocal({ best, bestDifficulty: runDifficulty });
         pushServerState({ force: true, quiet: true });
         if (!beatBestThisRun) {
           beatBestThisRun = true;
@@ -680,10 +731,6 @@
     } else {
       snake.pop();
     }
-  }
-
-  function speedLevel() {
-    return Math.max(1, Math.round((baseDelay - moveDelay) / 3) + 1);
   }
 
   function finish() {
@@ -811,6 +858,10 @@
     const playing = running && !paused && !gameOver;
     rootEl.classList.toggle("is-playing", playing);
     rootEl.dataset.state = playing ? "playing" : paused ? "paused" : gameOver ? "over" : "ready";
+    // No difficulty changes while a run is live or paused.
+    const locked = running && !gameOver;
+    difficultyEl.disabled = locked;
+    difficultyEl.title = locked ? "Difficulty is locked until this run ends" : "Difficulty for the next run";
     // Hidden panels change what sits above the arena, so resize right away.
     layoutArena();
   }

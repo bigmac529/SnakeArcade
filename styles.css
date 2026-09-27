@@ -109,7 +109,7 @@ p {
 .scoreboard {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(3, minmax(70px, 1fr));
+  grid-template-columns: repeat(2, minmax(70px, 1fr));
 }
 
 .developer-link {
@@ -189,6 +189,11 @@ p {
 
 .difficulty select {
   text-transform: none;
+}
+
+.difficulty select:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .help {
@@ -516,7 +521,7 @@ button:disabled,
   border-radius: 8px;
   display: grid;
   gap: 8px;
-  grid-template-columns: 2.2rem 1fr auto;
+  grid-template-columns: 2.2rem minmax(0, 1fr) auto auto;
   padding: 8px 10px;
 }
 
@@ -536,6 +541,25 @@ button:disabled,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.board-diff {
+  color: var(--muted);
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.board-diff:not(:empty) {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+
+.board-diff[data-difficulty="hard"] {
+  border-color: rgba(242, 201, 76, 0.55);
+  color: var(--accent-2);
 }
 
 .board-best {
@@ -624,7 +648,7 @@ button:disabled,
   .scoreboard {
     flex: 1 0 100%;
     gap: 6px;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, 1fr);
   }
 
   .scoreboard div {

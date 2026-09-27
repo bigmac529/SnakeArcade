@@ -21,6 +21,18 @@ Dev script is the same entrypoint: `npm run dev`.
 
 **Start** (or the **Start game** button on the board) is the only way to begin a run, and it needs a saved PG name this session. Taps, key presses, and the turn buttons never start a game.
 
+### Difficulty
+
+Pick **Difficulty** before you press **Start**. The snake moves at one fixed speed for the whole run. It never speeds up over time or as your score grows.
+
+| Difficulty | Tick (ms per block) | Points per dot |
+| --- | --- | --- |
+| Easy | 1000 | 5 |
+| Normal (default) | 500 | 10 |
+| Hard | 250 | 20 |
+
+The dropdown is disabled while a run is live or paused. A change applies from the next **Start** / **Restart**, so it can never change the speed of a game in progress. Saved settings from the old **Pace** control carry over: `easy` and `normal` stay the same, and `fast` becomes **Hard**.
+
 ### Phone / touch: two buttons
 
 - **Left** turns the snake 90° counter-clockwise from the way it is heading now.
@@ -67,20 +79,21 @@ While a run is live on a phone, the name panel, extra buttons, and Arcade board 
 
 ## Player settings & Arcade board
 
-Enter a PG player name (2+ characters) and tap **Save name**. That writes name + mute/pace/best to `data/settings.json` via `PUT /api/settings`. Guest / empty names cannot start.
+Enter a PG player name (2+ characters) and tap **Save name**. That writes name + mute/difficulty/best to `data/settings.json` via `PUT /api/settings`. Guest / empty names cannot start.
 
 If the name already exists on the server, the UI asks for confirmation (shows the existing best score) and only overwrites after you confirm (`force: true`).
 
 Changing the name input clears the session “saved” flag until you save again. Start / overlay Start / Restart stay disabled until a successful save this session.
 
-The **Arcade board** panel lists all players sorted by best score (desc). It refreshes on load, after save, and when a new best is synced.
+The **Arcade board** panel lists all players sorted by best score (desc), with a small tag showing the difficulty the best was set on (older entries saved before this feature have no tag). It refreshes on load, after save, and when a new best is synced.
 
 ### API
 
 - `GET /api/health` → `{ ok, app, node, port, time }`
-- `GET /api/players` → `{ revision, players: [{ playerName, best, updatedAt, key }] }` sorted by best
+- `GET /api/players` → `{ revision, players: [{ playerName, best, bestDifficulty?, updatedAt, key }] }` sorted by best
 - `GET /api/settings?player=` → one player record (+ `revision`)
-- `PUT /api/settings` body: `{ playerName, muted, difficulty, best, force?, baseRevision? }`
+- `PUT /api/settings` body: `{ playerName, muted, difficulty, best, bestDifficulty?, force?, baseRevision? }`
+  - `difficulty` / `bestDifficulty`: `easy` | `normal` | `hard`. The legacy value `fast` is still accepted and stored as `hard`. If `bestDifficulty` is omitted, the previous tag is kept unless `best` changed.
   - `400` `{ error: "playerName_rejected", message }` — PG / validation reject
   - `409` `{ error: "name_exists", existing, revision }` — name taken and `force` not set
   - `409` `{ error: "revision_conflict" | "lock_busy", revision }` — concurrency
@@ -98,6 +111,7 @@ Store shape:
       "muted": false,
       "difficulty": "normal",
       "best": 120,
+      "bestDifficulty": "hard",
       "updatedAt": "2026-09-13T12:00:00.000Z"
     }
   }
