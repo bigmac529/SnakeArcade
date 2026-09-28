@@ -1,27 +1,32 @@
 # One-time setup: self-hosted GitHub Actions runner on the SnakeArcade server
 
-`.github/workflows/deploy.yml` deploys every push to `main` (and manual
-"Run workflow" clicks) by running on a **self-hosted runner installed on the
-production Windows server**. The runner only makes outbound HTTPS calls to
+The deploy jobs of `.github/workflows/build-and-deploy-test.yml` (every push
+to `main` goes to the **test** site) and `.github/workflows/deploy-production.yml`
+(manual publish to **production**) run on a **self-hosted runner installed on
+the Windows server**; both call `.github/workflows/deploy-build.yml`. One
+runner serves both sites. Building happens on GitHub-hosted runners; this
+runner only downloads a verified build zip and deploys it. The runner only makes outbound HTTPS calls to
 GitHub, so no inbound port, RDP, or SSH access is needed.
 
 Do these steps once, as a local Administrator on the server, **before merging
 the PR that adds the workflow** (the merge itself is a push to `main` and will
 queue a deploy; a queued job waits for a runner for up to 24 hours).
 
-Assumed layout (matches `scripts/deploy.ps1` defaults and the workflow `env:`):
+Assumed layout (matches the defaults in `.github/workflows/deploy-build.yml`):
 
-| Item | Value |
-| --- | --- |
-| Content root | `C:\WebApps\SnakeArcade` (contains `web.config`, `data\`) |
-| Player data | `C:\WebApps\SnakeArcade\data\settings.json` (never copied over or deleted) |
-| Node service | `SnakeArcadeNode` (WinSW, `C:\Tools\WinSW\SnakeArcadeNode.exe` + `.xml`), `PORT=3105` |
-| Node.js | on `PATH`, or `C:\Program Files\nodejs` |
-| Data backups | `C:\WebApps\SnakeArcade-backups` (a copy of `settings.json` before each deploy, last 20 kept) |
-| Runner folder | `C:\actions-runner` |
-| Runner account | local user `svc-snakearcade` (not an administrator) |
+| Item | Production | Test |
+| --- | --- | --- |
+| Content root (contains `web.config`, `data\`, `logs\`) | `C:\WebApps\SnakeArcade` | `C:\WebApps\SnakeArcadeTest` |
+| Player data (never copied over or deleted) | `...\data\settings.json` | `...\data\settings.json` |
+| Node service (WinSW, `C:\Tools\WinSW\<name>.exe` + `.xml`) | `SnakeArcadeNode`, `PORT=3105` | `SnakeArcadeTestNode`, `PORT=3107` |
+| Data backups (`settings.json` before each deploy, last 20 kept) | `C:\WebApps\SnakeArcade-backups` | `C:\WebApps\SnakeArcadeTest-backups` |
+| Settings/secrets folder (after the accounts PR) | `C:\WebApps\SnakeArcade-config` | `C:\WebApps\SnakeArcadeTest-config` |
+| Node.js | on `PATH`, or `C:\Program Files\nodejs` | same |
+| Runner folder / account | `C:\actions-runner` / local user `svc-snakearcade` (not an administrator) | same runner |
 
-If any of these differ, change the `env:` block in `.github/workflows/deploy.yml`.
+If any of these differ, set the matching variable (`APP_ROOT`, `SERVICE_NAME`,
+`APP_PORT`, `PUBLIC_URL`, `ENV_FILE`, `BACKUP_ROOT`) on the `production` or
+`test` environment (**Settings > Environments**); see `docs/release-pipeline.md`.
 
 ---
 
@@ -47,6 +52,9 @@ icacls "C:\WebApps\SnakeArcade" /grant "svc-snakearcade:(OI)(CI)M"
 New-Item -ItemType Directory -Force "C:\WebApps\SnakeArcade-backups" | Out-Null
 icacls "C:\WebApps\SnakeArcade-backups" /grant "svc-snakearcade:(OI)(CI)M"
 ```
+
+For the test site, do the same for `C:\WebApps\SnakeArcadeTest` and
+`C:\WebApps\SnakeArcadeTest-backups` (already done on socha3).
 
 `M` (Modify) is needed because the mirror deletes files that were removed
 from the repo. The account running `SnakeArcadeNode` keeps its existing
@@ -76,6 +84,10 @@ sc.exe sdshow $svc
 Rights in the ACE: `CC` query config, `LC` query status, `SW` enumerate
 dependents, `RP` start, `WP` stop, `LO` interrogate, `RC` read permissions.
 To undo: `sc.exe sdset SnakeArcadeNode (Get-Content C:\WebApps\SnakeArcade-backups\SnakeArcadeNode-sddl-original.txt)`.
+
+Repeat with `$svc = "SnakeArcadeTestNode"` (saving to
+`C:\WebApps\SnakeArcadeTest-backups\SnakeArcadeTestNode-sddl-original.txt`) for
+the test service (already done on socha3).
 
 ## 3. Download the Actions runner (Windows x64)
 
@@ -132,21 +144,25 @@ Runners** should list `snakearcade-prod` as **Idle** with the labels
 Optional but recommended before the first automated deploy: preview what the
 mirror would copy and delete, without stopping anything.
 
+Download a build zip from the repo's **Releases** page (or a clone with
+`npm.cmd ci --omit=dev`), extract it to e.g. `C:\Temp\SnakeArcade-dry`, then:
+
 ```powershell
-git clone https://github.com/bigmac529/SnakeArcade C:\Temp\SnakeArcade-dry
 cd C:\Temp\SnakeArcade-dry
-npm.cmd ci --omit=dev
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\deploy.ps1 -DryRun
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\deploy.ps1 -SourceDir . -DryRun `
+  -AppRoot C:\WebApps\SnakeArcadeTest -ServiceName SnakeArcadeTestNode -Port 3107 `
+  -PublicUrl https://test.snakearcade.socha3.com/
 ```
 
-Anything listed as `*EXTRA File` / `*EXTRA Dir` would be deleted from
-`C:\WebApps\SnakeArcade`. `data\`, `web.config`, `logs\`, `*.log` and the
-WinSW files are excluded and must not show up. If something else must stay
-(for example a `.well-known` folder), add it to `-ExtraExcludeDirs` /
-`-ExtraExcludeFiles` in the workflow's deploy step.
+Anything listed as `*EXTRA File` / `*EXTRA Dir` would be deleted from the
+content root. `data\`, `logs\`, `web.config`, `.well-known\`, `*.log`,
+`.env` / `*.env` and the WinSW files are excluded and must not show up. If
+something else must stay, add it with `-ExtraExcludeDirs` /
+`-ExtraExcludeFiles` in the deploy step of `.github/workflows/deploy-build.yml`.
 
-Then merge (or run **Actions > Deploy > Run workflow** on `main`) and watch
-the job: it ends with `DEPLOY OK` after `/api/health` answers `ok: true`.
+Then merge (or run **Actions > Build and deploy to test > Run workflow** on
+`main`) and watch the `deploy-test` job: it ends with `DEPLOY OK` after
+`/api/health` answers `ok: true` with the new build's tag.
 
 ---
 
@@ -155,27 +171,32 @@ the job: it ends with `DEPLOY OK` after `/api/health` answers `ok: true`.
 The runner executes code on the production server, and this repository is
 public. Rules:
 
-1. **The deploy workflow must never run on `pull_request` or
-   `pull_request_target`, especially from forks.** It triggers only on
+1. **The deploy workflows must never run on `pull_request` or
+   `pull_request_target`, especially from forks.** They trigger only on
    `push` to `main` and `workflow_dispatch` (which only users with write
-   access can start), and the job also checks
-   `github.ref == 'refs/heads/main'`. Do not add PR triggers to it.
+   access can start), and the jobs also check
+   `github.ref == 'refs/heads/main'`. Do not add PR triggers to them.
 2. **A fork PR can add its own workflow file** that targets
    `runs-on: [self-hosted, snakearcade]`. Pull-request workflows run the
-   PR's version of `.github/workflows`, so the triggers in `deploy.yml` alone
+   PR's version of `.github/workflows`, so the triggers in our workflows alone
    do not protect the runner. Therefore turn on:
    **Settings > Actions > General > "Approval for running fork pull request
    workflows from contributors" > "Require approval for all external
    contributors"** (older UI: "Require approval for all outside
    collaborators"), and never approve a fork run you have not read,
    especially one that changes anything under `.github/`.
-3. Optional hardening: **Settings > Environments > production** (created on
-   the first deploy) > "Deployment branches and tags" > *Selected branches* >
-   `main`; and add required reviewers if you want a manual gate.
-4. The workflow token is read-only (`permissions: contents: read`) and
-   checkout does not persist credentials on disk.
+3. Hardening (see `docs/release-pipeline.md`): **Settings > Environments >
+   production** and **test** > "Deployment branches and tags" > *Selected
+   branches* > `main`; add yourself as a required reviewer on `production`
+   for a manual gate.
+4. The deploy jobs on this runner get a read-only token
+   (`permissions: contents: read`), checkout does not persist credentials on
+   disk, and the runner only deploys a zip whose SHA-256 was checked (for
+   production also its signed build provenance). Releases are published by
+   GitHub-hosted jobs, never by this runner.
 5. The runner account is not an administrator: it can only write the content
-   root / backup folder and start/stop `SnakeArcadeNode`.
+   roots / backup folders and start/stop `SnakeArcadeNode` and
+   `SnakeArcadeTestNode`.
 
 ## Removing the runner
 

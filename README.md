@@ -124,9 +124,14 @@ Hiding the tab (switching apps, locking the phone) pauses a live run, in or out 
 - `server.js` - Express static host + settings/players API + `/api/health`
 - `data/settings.json` - revisioned per-player settings map (created at runtime; gitignored)
 - `scripts/post-deploy.ps1` - manual post-copy setup on the server (npm, data/, web.config, restart, smoke test)
-- `scripts/deploy.ps1` - automated deploy used by GitHub Actions (stop service, robocopy mirror, start, health check)
+- `scripts/deploy.ps1` - deploy one build to one site (test or production): stop service, robocopy mirror, start, health check
 - `scripts/install-runner.md` - one-time self-hosted runner setup + security notes
-- `.github/workflows/deploy.yml` - deploy on push to `main` / manual run
+- `.github/workflows/build-and-deploy-test.yml` - on every push to `main`: build a versioned release zip and deploy it to the test site
+- `.github/workflows/deploy-production.yml` - manual: publish a chosen build to production (or roll back)
+- `.github/workflows/deploy-build.yml` - shared deploy job used by both
+- `.github/scripts/` - build packaging, build selection and download helpers
+- `docs/release-pipeline.md` - release pipeline, GitHub settings, test-site checklist
+- `build-info.json` - written into each build zip (tag, commit); not in git
 
 ## Player settings & Arcade board
 
@@ -146,7 +151,7 @@ Scores are saved with `POST /api/score`: each new best during a run, and the fin
 
 ### API
 
-- `GET /api/health` → `{ ok, app, node, port, time }`
+- `GET /api/health` → `{ ok, app, node, port, build?, time }` (`build` = `{ tag, sha, builtAt }` from `build-info.json`, present on deployed builds)
 - `GET /api/players` → `{ revision, players: [{ playerName, best, bestDifficulty?, updatedAt, key }] }` sorted by best; players with best 0 aren't listed (their record and name claim remain)
 - `GET /api/settings?player=` → one player record (+ `revision`)
 - `POST /api/score` body: `{ playerName, score, difficulty, epoch? }` → `{ ok, improved, stale, score, player, revision, players }`
@@ -213,20 +218,33 @@ app.listen(PORT, "localhost", () => {
 
 `process.env.PORT` is already respected (local default `3023`; production service uses `3105`).
 
-### Automatic deploy on merge to `main` (GitHub Actions)
+### Release pipeline: test on merge, production on demand (GitHub Actions)
 
-`.github/workflows/deploy.yml` deploys every push to `main` (plus manual **Actions > Deploy > Run workflow**) on a self-hosted runner that lives on the server (labels `self-hosted, windows, snakearcade`), so the server needs no inbound access. Deploys never overlap (`concurrency`).
+Two sites run on the same server, deployed by a self-hosted runner that lives there (labels `self-hosted, windows, snakearcade`), so the server needs no inbound access:
 
-Steps: checkout, use the Node.js already installed on the server, `npm ci --omit=dev` (or `npm install --omit=dev` without a lockfile), then `scripts/deploy.ps1` (Windows PowerShell 5.1):
+| | Test | Production |
+| --- | --- | --- |
+| URL | `https://test.snakearcade.socha3.com/` | `https://snakearcade.socha3.com/` |
+| Content root | `C:\WebApps\SnakeArcadeTest` | `C:\WebApps\SnakeArcade` |
+| Node service / port | `SnakeArcadeTestNode` / `3107` | `SnakeArcadeNode` / `3105` |
+| IIS site + app pool | `SnakeArcadeTest` | `SnakeArcade` |
+| Deployed | automatically, every push to `main` | only when someone runs **Deploy to production** |
 
-1. Stops `SnakeArcadeNode`.
-2. Backs up `data\settings.json` to `C:\WebApps\SnakeArcade-backups`.
-3. Mirrors the checkout into `C:\WebApps\SnakeArcade` with `robocopy /MIR`, excluding `data\`, `.git\`, `.github\`, `logs\`, `web.config`, `*.log` and the WinSW files (robocopy exit codes 0-7 = success, 8+ = failure), then verifies `settings.json` is unchanged.
-4. Starts the service and polls `http://localhost:3105/api/health` until `ok: true` (the job fails otherwise), then checks the public URL. The workflow passes `-RequirePublicHealthy`, so the job fails if the public URL never returns `ok: true` (e.g. an IIS/ARR 502). Health URLs get a cache-busting query string because ARR caches `/api/health` briefly.
+1. **Merge to `main`**: **Build and deploy to test** builds once on a GitHub-hosted runner (`npm ci --omit=dev`, then a zip with `node_modules` and a `build-info.json`). It publishes the zip as a versioned GitHub Release `build-<run number>-<sha7>` with its SHA-256 and a signed build provenance attestation (a build is never rebuilt or replaced; with immutable releases turned on, GitHub enforces that), then deploys exactly that zip to test. When test is healthy, the release notes record "deployed to **test**" and its title gets "- tested"; the most recently tested build is `latest-test`.
+2. **Publish to production**: **Actions > Deploy to production > Run workflow** (branch `main`) > *Build to publish* (default `latest-test`, or a tag like `build-42-1a2b3c4`, a build number, or a commit SHA) > **Run workflow**. The workflow checks the SHA-256, the attestation (built by this repo's workflow from `main` for that commit) and that the commit is on `main`, waits for approval if the `production` environment has a required reviewer, then deploys the same bytes. Builds that never passed on test are refused unless *Allow untested* is ticked.
+3. **Roll back**: run **Deploy to production** again with an older tag from the Releases page. Each release's notes record where and when it was deployed.
 
-Paths, service name and port are parameters at the top of `scripts/deploy.ps1` and in the workflow `env:`. Preview a deploy without changing anything: `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\deploy.ps1 -DryRun`.
+Both targets use `scripts/deploy.ps1` (Windows PowerShell 5.1), which:
 
-One-time runner setup and the security rules for a self-hosted runner on a public repo: [`scripts/install-runner.md`](scripts/install-runner.md). The workflow must never run on `pull_request` from forks; keep "Require approval for all external contributors" enabled for fork PR workflows.
+1. Checks the build (`build-info.json` tag, `node_modules\express`) and, for database builds, runs migrations before anything is stopped.
+2. Stops the site's service (a stopped or empty service is fine: the first test deploy starts from nothing).
+3. Backs up `data\settings.json` to `<content root>-backups`.
+4. Mirrors the build into the content root with `robocopy /MIR`, never copying over or deleting `data\`, `logs\`, `web.config`, `.well-known\`, `*.log`, `.env` / `*.env` or the WinSW files (robocopy exit codes 0-7 = success, 8+ = failure), then verifies `settings.json` is unchanged.
+5. Starts the service, polls `http://localhost:<port>/api/health` until `ok: true` **and** the reported `build.tag` is the build just deployed, then checks `<public URL>api/health` (required for production, a warning only for test until its HTTPS is live). Health URLs get a cache-busting query string because ARR caches `/api/health` briefly.
+
+Site settings (paths, service, port, URL) have defaults in `.github/workflows/deploy-build.yml`, and a GitHub Environment variable (`APP_ROOT`, `SERVICE_NAME`, `APP_PORT`, `PUBLIC_URL`, `ENV_FILE`, `BACKUP_ROOT`, `REQUIRE_PUBLIC_HEALTH`) on the `test` or `production` environment overrides each one. Preview a deploy without changing anything: `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\deploy.ps1 -SourceDir <extracted build> -DryRun` (add `-AppRoot C:\WebApps\SnakeArcadeTest -ServiceName SnakeArcadeTestNode -Port 3107 -PublicUrl https://test.snakearcade.socha3.com/` for test).
+
+Full details, the GitHub settings to make once, and the test-site checklist for the server admin: [`docs/release-pipeline.md`](docs/release-pipeline.md). One-time runner setup and the security rules for a self-hosted runner on a public repo: [`scripts/install-runner.md`](scripts/install-runner.md). These workflows must never run on `pull_request` from forks; keep "Require approval for all external contributors" enabled for fork PR workflows.
 
 ### Post-deploy script
 
@@ -239,9 +257,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\post-deploy.ps1
 
 That script installs npm deps (`npm ci` / `npm install --omit=dev`), ensures `data\` and `web.config` (creates `web.config` only if missing), restarts `SnakeArcadeNode`, and smoke-tests `http://localhost:3105/`.
 
-Optional: `-SkipNpm`, `-AppRoot C:\WebApps\SnakeArcade`, `-Port 3105`.
+Optional: `-SkipNpm`, `-AppRoot C:\WebApps\SnakeArcade`, `-Port 3105`. For the test site: `-AppRoot C:\WebApps\SnakeArcadeTest -Port 3107 -ServiceName SnakeArcadeTestNode -SiteName SnakeArcadeTest -PublicUrl https://test.snakearcade.socha3.com/`. The pipeline does not use this script; it is for manual repair.
 
-### Deploy steps
+### Manual deploy steps (without the pipeline)
 
 1. Copy app files into `C:\WebApps\SnakeArcade` (or sync from this repo).
 2. **Keep** the server `web.config` that rewrites to `http://localhost:3105/{R:1}` (use `localhost`, not `127.0.0.1`). Do not overwrite it with an empty/missing file from git if the repo has no `web.config`.
@@ -269,6 +287,7 @@ Restart-Service SnakeArcadeNode
 
 - `C:\Tools\WinSW\SnakeArcadeNode.exe` (+ `.xml`) — service wrapper
 - IIS site/pool `SnakeArcade`
+- Test site: `C:\Tools\WinSW\SnakeArcadeTestNode.exe` (+ `.xml`), IIS site/pool `SnakeArcadeTest`, `C:\WebApps\SnakeArcadeTest\web.config` (carries the Let's Encrypt renewal rule)
 - Cloudflare DNS `snakearcade.socha3.com` (proxied A to the origin)
 
 ### Optional
