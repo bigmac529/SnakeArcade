@@ -675,14 +675,19 @@
 
     try {
       // No best in the draft: the name's best comes from the server (0 for a
-      // new name), never from this browser's previous name.
+      // new name), never from this browser's previous name. (saveToServer
+      // never sends one either; this keeps the previous name's best out of
+      // the draft altogether.)
+      const { best: _prevBest, bestDifficulty: _prevBestDifficulty, ...carried } = settings;
       const draft = {
-        ...settings,
+        ...carried,
         playerName: nameInput.value.trim(),
         muted,
         difficulty: selectedDifficulty()
       };
 
+      // An existing name was claimed (it keeps its own best).
+      let claimed = false;
       let result = await window.SnakeSettings.saveToServer(draft, {
         force: false,
         baseRevision: window.SnakeSettings.getKnownRevision()
@@ -692,8 +697,13 @@
         const existingBest = result.existing ? Number(result.existing.best || 0) : 0;
         const existingLabel =
           (result.existing && result.existing.playerName) || draft.playerName;
+        // Claiming a name keeps that name's own best (it never takes this
+        // browser's previous best, and it doesn't reset it either). Say so,
+        // so an existing name isn't mistaken for a new one.
         const ok = window.confirm(
-          `"${existingLabel}" is already on the arcade board (best score: ${existingBest}).\n\nClaim / overwrite this name?`
+          existingBest > 0
+            ? `"${existingLabel}" is already on the arcade board with a best of ${existingBest}.\n\nPlay as "${existingLabel}"? Its best of ${existingBest} stays with the name. To start it from 0, use Settings > Reset best score after saving.`
+            : `"${existingLabel}" is already taken (no score on the arcade board yet).\n\nPlay as "${existingLabel}"?`
         );
         if (!ok) {
           nameHint.textContent = "Save cancelled — that name is already taken.";
@@ -701,6 +711,7 @@
           announce("Save cancelled.");
           return;
         }
+        claimed = true;
         result = await window.SnakeSettings.saveToServer(draft, {
           force: true,
           baseRevision: result.revision != null
@@ -742,7 +753,9 @@
           setBoardStatus("");
         }
       }
-      nameHint.textContent = `Saved as ${settings.playerName}. You’re cleared to Start.`;
+      nameHint.textContent = claimed && best > 0
+        ? `Saved as ${settings.playerName}. This name already has a best of ${best}. You’re cleared to Start.`
+        : `Saved as ${settings.playerName}. You’re cleared to Start.`;
       nameHint.classList.remove("error");
       announce(`Name saved: ${settings.playerName}.`);
       updateStartGateUi();
@@ -1041,12 +1054,14 @@
     if (!nameSavedThisSession || !savedNameSnapshot) {
       return;
     }
+    // Name, mute and difficulty only: scores reach the server through
+    // POST /api/score, never with a settings save.
+    const { best: _best, bestDifficulty: _bestDifficulty, ...carried } = settings;
     const draft = {
-      ...settings,
+      ...carried,
       playerName: savedNameSnapshot,
       muted,
-      difficulty: selectedDifficulty(),
-      best
+      difficulty: selectedDifficulty()
     };
     try {
       const result = await window.SnakeSettings.saveToServer(draft, {
