@@ -6,7 +6,8 @@ const http = require("http");
 const path = require("path");
 
 const ROOT = path.join(__dirname, "..");
-const PORT = Number(process.env.PORT) || 3023;
+// Read .env / SNAKEARCADE_ENV_FILE the same way server.js does.
+const PORT = require("../src/config").loadConfig(process.env).port;
 const URL = `http://localhost:${PORT}/`;
 
 function log(msg) {

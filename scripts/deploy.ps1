@@ -8,12 +8,18 @@
   PowerShell 5.1). It can also be run by hand on the server.
 
   Steps:
-    1. Pre-flight checks (paths, service, robocopy, node_modules present).
+    1. Pre-flight checks (paths, service, robocopy, node_modules present,
+       server env file present).
+    1b. Apply database migrations from the checkout (npm run migrate) BEFORE
+       stopping the service, using the server env file (-EnvFile). A failed
+       migration fails the deploy with the old version still running.
+       Skipped with -SkipMigrations or when the env file does not exist
+       (server.js then migrates on start unless DB_MIGRATE_ON_START=false).
     2. Stop the WinSW service (default SnakeArcadeNode).
     3. Back up data\settings.json outside the content root.
     4. Mirror the checkout into the content root with robocopy /MIR.
        Never copied or purged: data\, .git\, .github\, logs\, .vs\,
-       web.config, *.log, WinSW wrapper files (<ServiceName>.exe/.xml/...),
+       web.config, .env, *.env, *.log, WinSW wrapper files (<ServiceName>.exe/.xml/...),
        plus anything passed in -ExtraExcludeDirs / -ExtraExcludeFiles.
     5. Verify data\settings.json is byte-identical (restore from backup if not).
     6. Start the service.
@@ -49,6 +55,11 @@ param(
   [int]$ServiceTimeoutSeconds = 60,
   [string[]]$ExtraExcludeDirs = @(),
   [string[]]$ExtraExcludeFiles = @(),
+  # Server settings and secrets (NODE_ENV, SESSION_SECRET, DB_*, SMTP_*): an env
+  # file OUTSIDE AppRoot. The WinSW service should point at the same file with
+  # <env name="SNAKEARCADE_ENV_FILE" value="..."/>. See docs\database-setup.md.
+  [string]$EnvFile = "C:\WebApps\SnakeArcade-config\snakearcade.env",
+  [switch]$SkipMigrations,
   [switch]$DryRun
 )
 
@@ -142,6 +153,7 @@ try {
   Write-Host "Port        : $Port"
   Write-Host "PublicUrl   : $PublicUrl"
   Write-Host "BackupRoot  : $BackupRoot"
+  Write-Host "EnvFile     : $EnvFile"
   Write-Host "DryRun      : $DryRun"
 
   # Guard rails: never mirror onto a drive root, onto the source, or into/over each other.
@@ -174,6 +186,17 @@ try {
   if (-not (Test-Path -LiteralPath $robocopy -PathType Leaf)) {
     throw "robocopy.exe not found at $robocopy."
   }
+  $haveEnvFile = $false
+  if ($EnvFile) {
+    $EnvFile = Resolve-FullPath $EnvFile
+    if ($EnvFile.StartsWith("$AppRoot\", [StringComparison]::OrdinalIgnoreCase)) {
+      throw "EnvFile '$EnvFile' is inside AppRoot. Keep secrets outside the content root (e.g. C:\WebApps\SnakeArcade-config\snakearcade.env)."
+    }
+    $haveEnvFile = Test-Path -LiteralPath $EnvFile -PathType Leaf
+  }
+  if (-not $haveEnvFile) {
+    Write-Warning "No env file at '$EnvFile'. The service must get NODE_ENV, SESSION_SECRET, DB_* and SMTP_* from its WinSW <env> entries instead (see docs\database-setup.md), or it will refuse to start."
+  }
   if (-not (Test-Path -LiteralPath (Join-Path $AppRoot "web.config") -PathType Leaf)) {
     Write-Warning "No web.config in $AppRoot. The IIS ARR rewrite will not work until one exists (scripts\post-deploy.ps1 can create it). The mirror never creates or deletes web.config."
   }
@@ -199,7 +222,8 @@ try {
     "*.wrapper.log",
     "*.out.log",
     "*.err.log",
-    ".env"
+    ".env",
+    "*.env"
   ) + $ExtraExcludeFiles | Where-Object { $_ }
 
   $roboArgs = @($SourceDir, $AppRoot, "/MIR", "/XJ", "/R:3", "/W:5", "/NP")
@@ -225,6 +249,39 @@ try {
 
   if (-not (Test-Path -LiteralPath $BackupRoot -PathType Container)) {
     New-Item -ItemType Directory -Path $BackupRoot -Force | Out-Null
+  }
+
+  # ------------------------------------------------------------------ migrations
+  # Run from the checkout while the old version is still serving. Migrations only
+  # add tables/columns, so the running version is not affected. Uses
+  # DB_MIGRATION_CONNECTION_STRING from the env file when set (a login with DDL
+  # rights), otherwise the app's own connection settings.
+  if ($SkipMigrations) {
+    Write-Step "Migrations skipped (-SkipMigrations)"
+  } elseif (-not $haveEnvFile) {
+    Write-Step "Migrations skipped (no env file; server.js migrates on start unless DB_MIGRATE_ON_START=false)"
+  } else {
+    Write-Step "Apply database migrations"
+    $prevEnvFile = $env:SNAKEARCADE_ENV_FILE
+    $prevNodeEnv = $env:NODE_ENV
+    try {
+      $env:SNAKEARCADE_ENV_FILE = $EnvFile
+      if (-not $env:NODE_ENV) { $env:NODE_ENV = "production" }
+      Push-Location $SourceDir
+      try {
+        & node.exe scripts\migrate.js
+        $migrateExit = $LASTEXITCODE
+      } finally {
+        Pop-Location
+      }
+    } finally {
+      $env:SNAKEARCADE_ENV_FILE = $prevEnvFile
+      $env:NODE_ENV = $prevNodeEnv
+    }
+    $global:LASTEXITCODE = 0
+    if ($migrateExit -ne 0) {
+      throw "Database migration failed (exit $migrateExit). Nothing was stopped or copied; the current version keeps running."
+    }
   }
 
   # ------------------------------------------------------------------ stop

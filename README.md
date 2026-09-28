@@ -1,25 +1,25 @@
 # SnakeArcade
 
-HTML5 Canvas snake game with a small Node.js Express backend for per-player settings and an arcade leaderboard. Production Node host: [snakearcade.socha3.com](https://snakearcade.socha3.com) (older static copy may still live at [snakegame.socha3.com](https://snakegame.socha3.com)).
+HTML5 Canvas snake game with a small Node.js Express backend: player accounts (email + password, email confirmation), per-account best scores, and a public arcade leaderboard. Production Node host: [snakearcade.socha3.com](https://snakearcade.socha3.com) (older static copy may still live at [snakegame.socha3.com](https://snakegame.socha3.com)).
 
 ## Run locally
+
+Needs Node.js 22.13+ (production runs Node 24). Locally the database is a SQLite file (built into Node, nothing to install) and emails are written to a folder instead of being sent.
 
 ```bash
 npm install
 npm start
 ```
 
-`npm start` frees port 3023 if something is already listening, starts the server, and opens http://localhost:3023/ in your default browser.
+`npm start` frees port 3023 if something is already listening, starts the server, and opens http://localhost:3023/ in your default browser. On first start it creates `data/snakearcade.db` and applies the migrations.
 
-Visit [http://localhost:3023](http://localhost:3023).
+Emails (confirmation and password-reset links) land as JSON files in `data/outbox/`. Open the newest one and paste its link into the browser to confirm a local account.
 
-Optional: `PORT=8080 npm start`
-
-Dev script is the same entrypoint: `npm run dev`.
+Optional: copy `.env.example` to `.env` to change settings (port, SMTP, database). `PORT=8080 npm start` works too. `npm run dev` is the same entrypoint; `npm run serve` runs `node server.js` without the port/browser helper.
 
 ## Controls
 
-**Start** (or the **Start game** button on the board) is the only way to begin a run, and it needs a saved PG name this session. Every Start begins a fresh game. Taps, key presses, and the turn buttons never start a game.
+**Start** (or the **Start game** button on the board) is the only way to begin a run, and it needs a signed-in account with a confirmed email. Every Start begins a fresh game. Taps, key presses, and the turn buttons never start a game.
 
 **End game** (formerly Restart) stops the current run right away, whether it is playing or paused, exactly like a game over. It does not restart: the Difficulty dropdown unlocks, and you press **Start** to play again. Scores count the same as a crash game over (a new best is saved the moment you reach it during the run). **End game** is disabled when no run is active. On phones the toolbar is hidden during play, so press **Pause** first, then **End game**.
 
@@ -39,9 +39,9 @@ The **Settings** button (gear icon) in the toolbar opens a dialog with:
   - **Early:** a press turns in the cell the head is moving into, which is the logical head. Because drawing lags the logic by up to one tick, this is one cell ahead of the drawn head for the first half of each tick.
   - **Relaxed:** a press turns in the cell the head is *drawn* in, right up until the drawn head's centre crosses into the next cell. For the first half of each tick, the tick is provisional. A press then re-runs that tick from the state before it, with the turn applied in the cell the head was leaving. Collision and food are checked again for the corrected cell, and the tick count and timing do not change. A dot eaten or a crash in a provisional tick only counts when the window closes (half a tick later), so there is no score flicker and no missed or unfair crash. The head eases onto the corrected path over about 100 ms instead of jumping. With reduced motion there is no drawing lag, so Relaxed acts like Early.
 
-Changes apply right away, including while paused. They are saved per browser in `localStorage` (key `snakearcade.prefs.v1`), not on the server, so they are not tied to the player name and the settings API is unchanged. The guide and marker switches only change the drawing.
+Changes apply right away, including while paused. They are saved per browser in `localStorage` (key `snakearcade.prefs.v1`), not on the server, so they are not part of your account. The guide and marker switches only change the drawing.
 
-- **Reset best score** (button): sets the saved player's best to 0 for **that name only**. The button's hint names the player. It first asks inline, inside the dialog: "Reset your best of N to 0 for NAME? This removes NAME from the arcade board. Other names aren't affected." with **Cancel** (focused) and **Reset**; Escape backs out of the question first. On Reset, the best becomes 0 on the server (`POST /api/reset-best`), which takes the name off the board, and in every local key (`snake-arcade-settings-v1`, `classic-snake-settings-v1`, `classic-snake-best`). The board redraws and a result line appears. Scores from before the reset, still being saved or retried, are ignored, so the old best can't come back. It is disabled while a run is in progress (Settings pauses it); end the game first. With no name saved this session it only resets this browser's Best. If the server can't reset, nothing is changed and the dialog says so.
+- **Reset best score** (button): sets **your account's** best to 0. The button's hint names your account. It first asks inline, inside the dialog: "Reset your best of N to 0 for NAME? This removes NAME from the arcade board. Other players aren't affected." with **Cancel** (focused) and **Reset**; Escape backs out of the question first. On Reset, the best becomes 0 on the server (`POST /api/reset-best`), which takes you off the board; the board redraws and a result line appears. Scores from before the reset, still being saved or retried, are ignored, so the old best can't come back. It is disabled while a run is in progress (Settings pauses it) and when signed out. If the server can't reset, nothing is changed and the dialog says so.
 
 The dialog is modal: focus stays inside it, and **Escape**, a click on the backdrop, or **Close** closes it. Opening Settings during play pauses the game, and closing it leaves the game paused (press Resume or P to continue). On phones the toolbar is hidden during play, so Settings is available before Start, when paused and after a game.
 
@@ -79,7 +79,7 @@ Game logic runs on the fixed grid tick above: turns, eating, growth, collisions 
 - **Tight U-turns:** a double tap always makes the tightest U-turn. The snake moves exactly one cell sideways and comes back in the lane right beside its trail. After a turn, the next tick stays correctable while the head is still drawn in that first sideways cell, in both eagerness modes. A second press that arrives just after that tick has already moved the head on still turns in the first sideways cell, not one cell later. Before this, a second press landing just after the next tick made a U-turn one lane too wide, which happened most on Hard (64 ms per cell).
 - Swiping and the old D-pad are gone.
 
-While a run is live on a phone, the name panel, extra buttons, and Arcade board are hidden. That leaves the score, **Pause**, the board, and the two turn buttons (at the bottom, in thumb reach) on one screen with no scrolling. **Pause** (or a game over) brings everything back. Held sideways, the buttons sit on either side of the board.
+While a run is live on a phone, the account panel, extra buttons, and Arcade board are hidden. That leaves the score, **Pause**, the board, and the two turn buttons (at the bottom, in thumb reach) on one screen with no scrolling. **Pause** (or a game over) brings everything back. Held sideways, the buttons sit on either side of the board.
 
 ### Desktop keyboard: relative turns (same as the buttons)
 
@@ -93,14 +93,14 @@ While a run is live on a phone, the name panel, extra buttons, and Arcade board 
 - `P` / Space: pause or resume (only during a run)
 - `M`: sound on/off
 - `F`: full screen on/off (`Esc` also exits)
-- Keys typed into the name field (or any other input) never steer, pause, or start the game.
+- Keys typed into a text field (including the account dialog) never steer, pause, or start the game.
 
 ### Full screen
 
-The **Full screen** button (corner-arrows icon) in the toolbar, or `F` on a keyboard, switches to a view with only the current score, the board and the **Left** / **Right** buttons. The buttons show on desktop too; the keyboard still steers. `F` does nothing while you're typing in the name box. On phones the button sits next to **Settings** and, like Settings, is hidden while a run is live: use it before **Start**, while paused, or after a game.
+The **Full screen** button (corner-arrows icon) in the toolbar, or `F` on a keyboard, switches to a view with only the current score, the board and the **Left** / **Right** buttons. The buttons show on desktop too; the keyboard still steers. `F` does nothing while you're typing in a field or the account dialog is open. On phones the button sits next to **Settings** and, like Settings, is hidden while a run is live: use it before **Start**, while paused, or after a game.
 
 - **Layout:** held upright, the score is at the top left, the board is full width and sits right above the two turn buttons, and any spare height goes above the board. Held sideways (and on desktop), the board takes the middle and the buttons fill each side, with the score above **Left**.
-- **Controls inside full screen:** the board's overlay button reads **Start game**, **Resume** or **Play again** (after a game over, the overlay shows the score). A small **Pause** / **Resume** icon button and an **Exit full screen** icon button sit in the top right corner. `P` / Space still pause. Without a saved name, the overlay button reads **Exit full screen**, because the name box is outside the full screen view.
+- **Controls inside full screen:** the board's overlay button reads **Start game**, **Resume** or **Play again** (after a game over, the overlay shows the score). A small **Pause** / **Resume** icon button and an **Exit full screen** icon button sit in the top right corner. `P` / Space still pause. Signed out (or with an unconfirmed email), the overlay says so and its button reads **Exit full screen**: it leaves full screen and opens **Sign in** (or re-checks the email), because the account panel is outside the full screen view.
 - **Ways out:** the exit button, `Esc`, `F`, or leaving the browser's full screen any other way (for example a swipe or the browser's own control). All of them restore the normal page. Leaving mid-run pauses the game.
 - **How:** the real Fullscreen API (`requestFullscreen`, or `webkitRequestFullscreen` on Safari) on the game area. Where that API is missing or refused (iPhone Safari has no element full screen), an "immersive" mode pins the game area over the whole viewport instead and hides the rest of the page. Everything else works the same in that mode.
 - **Board size:** in full screen the board uses all the space it has, with no 640 px cap. With no run in progress, the grid is recomputed for the full screen shape. Entering or rotating mid-run keeps the run's columns and only rescales the cells to fit, and the next game uses the full screen size. Cells stay square and whole device pixels, so the board stays sharp.
@@ -116,77 +116,130 @@ Hiding the tab (switching apps, locking the phone) pauses a live run, in or out 
 
 ## Files
 
-- `index.html` - page shell + Arcade board panel
-- `styles.css` - layout and theme
-- `favicon.svg` - cute snake favicon
-- `game.js` - game loop, input (Left/Right turn buttons + keyboard), responsive canvas sizing, start-gate, leaderboard UI
-- `settings.js` - localStorage + server settings helpers
-- `server.js` - Express static host + settings/players API + `/api/health`
-- `data/settings.json` - revisioned per-player settings map (created at runtime; gitignored)
+- `public/` - everything the browser gets (the server serves only this folder):
+  - `index.html` - page shell, account panel + dialog, Arcade board panel
+  - `styles.css` - layout and theme
+  - `favicon.svg` - cute snake favicon
+  - `game.js` - game loop, input (Left/Right turn buttons + keyboard), responsive canvas sizing, start gate, leaderboard UI
+  - `account.js` - account panel and dialog (sign up, sign in, confirm email, forgot / reset password, edit name), session + CSRF handling
+  - `settings.js` - local prefs (mute, difficulty) + score/board API helpers
+- `server.js` - entry point: config check, migrations, HTTP server, graceful shutdown
+- `src/app.js` - Express app: security headers, CSRF/origin checks, rate limits, auth + score API, static `public/`
+- `src/config.js` - settings from environment variables / env file (see `.env.example`)
+- `src/store.js` - all database queries (parameterized)
+- `src/db/` - SQLite (`node:sqlite`) and SQL Server (`mssql`) adapters, migration runner
+- `src/auth/` - password hashing (scrypt), tokens, sessions/cookies, rate limiter
+- `src/mail.js` - SMTP (nodemailer) or local outbox, email texts
+- `src/validation.js` - email / password / display name rules (PG filter)
+- `migrations/sqlite/`, `migrations/mssql/` - schema migrations, one file per version per database
+- `scripts/migrate.js` - `npm run migrate` (`-- --check` lists pending ones)
+- `scripts/import-legacy.js` - optional one-time import of the old name-only board (`data/settings.json`)
+- `test/api.test.js` - API tests (`npm test`; SQLite by default, SQL Server with `TEST_DB=mssql`)
+- `docs/database-setup.md` - production database, secrets and SMTP setup, with a checklist
 - `scripts/post-deploy.ps1` - manual post-copy setup on the server (npm, data/, web.config, restart, smoke test)
-- `scripts/deploy.ps1` - automated deploy used by GitHub Actions (stop service, robocopy mirror, start, health check)
+- `scripts/deploy.ps1` - automated deploy used by GitHub Actions (migrate, stop service, robocopy mirror, start, health check)
 - `scripts/install-runner.md` - one-time self-hosted runner setup + security notes
 - `.github/workflows/deploy.yml` - deploy on push to `main` / manual run
 
-## Player settings & Arcade board
+## Accounts & Arcade board
 
-(The turn-highlight display options in the **Settings** dialog are separate: they are saved in this browser only, see [Settings](#settings).)
+(Mute, difficulty and the turn-highlight options in **Settings** stay in this browser's `localStorage`; they are not part of the account.)
 
-Enter a PG player name (2+ characters) and tap **Save name**. That writes name + mute/difficulty to `data/settings.json` via `PUT /api/settings`, never a best score. Guest / empty names cannot start.
+**Sign up** with an email address, a password (10+ characters) and a display name (2-24 characters, PG filter, unique ignoring case). The site emails a confirmation link; until it's opened the account panel shows **Email not confirmed** with a **Resend email** button, and the account can't play or post scores. The link works once and expires after 24 hours. Opening it (in this tab or another) confirms the email; the page POSTs the token, so a mail scanner that only follows the link can't use it up, and the token is removed from the address bar.
 
-If the name already exists on the server, the UI asks for confirmation and only claims it after you confirm (`force: true`). Claiming keeps that name's own best, and the question says so: *"NAME" is already on the arcade board with a best of N. Play as "NAME"? Its best of N stays with the name. To start it from 0, use Settings > Reset best score after saving.* After claiming, the name hint repeats the kept best. A brand-new name always starts at 0: Save name never sends a best score (only `POST /api/score` changes a best), and the server ignores one in a settings save.
+**Sign in** with email + password. A wrong password and an unknown email get the same message ("Email or password is incorrect."). **Forgot password?** always answers the same way whether or not the email has an account, and sends a reset link (single use, 60 minutes). Choosing a new password signs you in and signs out every other session.
 
-**A new name is a new player.** The Best box shows the saved name's best from the server: 0 for a new name, and the name's own best for an existing one. It is never this browser's best from a previous name, and the old name's board entry stays as it was. A name only appears on the board once a run played under it scores more than 0. Scores always go to the name the run started with. The name box and Save name are locked while a run is live or paused, and a score that failed to save stays with the name that scored it, even after a rename. On reload, the Best box takes the cached name's best from the server (0 if the name has no record).
+**Edit name** renames the account; the best score stays with the account, so the board shows the same entry under the new name (no copy). **Edit name** and **Sign out** are disabled while a run is live or paused. **Sign out** ends the session on the server.
 
-Changing the name input clears the session “saved” flag until you save again. Start / overlay Start stay disabled until a successful save this session.
+The **Best** box shows the signed-in account's best (0 when signed out). Scores go to the account that started the run; if you sign in as someone else before a failed save is retried, that score is dropped, never credited to the new account. **Settings > Reset best score** sets your own account's best to 0 and takes it off the board, after an inline confirmation; it's disabled while a run is in progress and when signed out.
 
-The **Arcade board** panel lists all players with a best above 0, sorted by best score (desc), with a small tag showing the difficulty the best was set on (older entries saved before this feature have no tag). It shows each player's **best** score only, so a game that doesn't beat your best leaves your row unchanged.
+The **Arcade board** lists display names (never emails) of confirmed accounts with a best above 0, sorted by best, with a small tag for the difficulty the best was set on. Your own row is highlighted. Rows imported from the old name-only board (optional, see below) carry a **legacy** tag.
 
-Scores are saved with `POST /api/score`: each new best during a run, and the final score at every game over / End game. The client sends one request at a time (only the highest waiting score), retries transient failures (0.4 s, 1.2 s, 3 s), and redraws the board from the save's own response, with a status line under the board header ("Saved: 120 is your best on the arcade board." / "Score 40. The board keeps your best: 120."). If a save still fails, the status line says so, with a **Retry** button; the failed score is also re-sent at the next game over. The board also refreshes on load and after Save name. API GETs use a unique query string and the server sends `Cache-Control: no-store`, because the IIS ARR proxy otherwise caches identical GETs for about a minute.
+Scores are saved with `POST /api/score`: each new best during a run, and the final score at every game over / End game. The client sends one request at a time (only the highest waiting score), retries transient failures (0.4 s, 1.2 s, 3 s), and redraws the board from the save's own response, with a status line under the board header ("Saved: 120 is your best on the arcade board." / "Score 40. The board keeps your best: 120."). If a save still fails, the status line says so, with a **Retry** button. API GETs use a unique query string and the server sends `Cache-Control: no-store`, because the IIS ARR proxy otherwise caches identical GETs for about a minute.
+
+### Security
+
+- Passwords: scrypt (N=32768, r=8, p=1, 16-byte salt), never logged or returned. Unknown-email logins still spend the same hashing time.
+- Sessions: random 256-bit id in an `HttpOnly`, `SameSite=Lax` cookie (`Secure` and the `__Host-` prefix in production); only its SHA-256 hash is stored. 30 days, sliding. Signing out or resetting the password deletes sessions server-side.
+- Email tokens: random 256-bit, stored hashed, single use (atomic), 24 h (confirm) / 60 min (reset).
+- CSRF: every state-changing request needs the `X-CSRF-Token` header (HMAC of the session) and an allowed `Origin`/`Referer`, and must be `application/json`.
+- Rate limits (per IP and per account): sign-up, sign-in, resend (cooldown + daily cap), forgot password.
+- Headers via helmet: strict same-origin Content-Security-Policy, no framing, no referrer, HSTS in production. Only `public/` is served; `data/`, `src/`, `server.js`, `package.json` etc. return 404.
+- Logs never contain passwords, tokens or full email addresses (masked as `a***@example.com`).
+- All SQL is parameterized.
 
 ### API
 
-- `GET /api/health` → `{ ok, app, node, port, time }`
-- `GET /api/players` → `{ revision, players: [{ playerName, best, bestDifficulty?, updatedAt, key }] }` sorted by best; players with best 0 aren't listed (their record and name claim remain)
-- `GET /api/settings?player=` → one player record (+ `revision`)
-- `POST /api/score` body: `{ playerName, score, difficulty, epoch? }` → `{ ok, improved, stale, score, player, revision, players }`
-  - The server keeps the higher of `score` and the stored best (and tags it with `difficulty` when the score is higher), so score saves can overlap, repeat, or arrive out of order without lowering a best. No `baseRevision`: another player's save can't make a score save fail. Creates the player record if it's missing and `score` > 0. `players` is the full board, like `GET /api/players`.
-  - `epoch`: the player's `scoreEpoch` when the run started. A score with an older epoch (from before a reset) is ignored (`stale: true`). Clients that don't send it are accepted.
-  - `400` `{ error: "playerName_rejected" | "score_invalid" }`, `503` `{ error: "lock_busy" }`, `500` `{ error: "write_failed" }`
-- `POST /api/reset-best` body: `{ playerName }` → `{ ok, found, previousBest, player, revision, players }`
-  - Sets that player's best to 0, removes its difficulty tag and bumps its `scoreEpoch`. It's then off the board. Other players are untouched. For an unknown name it changes nothing (`found: false`). This is the only way a best goes down.
-- `PUT /api/settings` body: `{ playerName, muted, difficulty, force?, baseRevision? }`
-  - `difficulty`: `easy` | `normal` | `hard`. The legacy value `fast` is still accepted and stored as `hard`.
-  - `400` `{ error: "playerName_rejected", message }` — PG / validation reject
-  - `409` `{ error: "name_exists", existing, revision }` — name taken and `force` not set
-  - `409` `{ error: "revision_conflict" | "lock_busy", revision }` — concurrency
-  - `200` saved player + `revision`
-  - Never changes the best score: a `best` / `bestDifficulty` in the body (older clients) is ignored. A new record starts at 0, and an existing or claimed one keeps its own best.
-- All `/api` responses send `Cache-Control: no-store`.
+All `/api` responses are JSON with `Cache-Control: no-store`. Errors are `{ ok: false, error, message, field? }`. POSTs need `Content-Type: application/json`, an allowed `Origin`, and (when signed in) the `X-CSRF-Token` header from `GET /api/auth/me`.
 
-Store shape:
+- `GET /api/health` → `{ ok, app, node, port, db, mail, time }`
+- `GET /api/auth/me` → `{ ok, signedIn, csrfToken, user: { id, email, displayName, verified, best, bestDifficulty, scoreEpoch } | null }` (your own email only)
+- `POST /api/auth/signup` `{ email, displayName, password }` → `201` + me payload, `mailSent`. `400` `email_invalid` / `displayName_rejected` / `password_invalid`, `409` `email_taken` / `name_taken`, `429`
+- `POST /api/auth/verify` `{ token }` → confirms; `signedIn` + me payload when the token belongs to the current session's account. `400` `token_invalid`
+- `POST /api/auth/resend-verification` (session) → `{ ok, alreadyVerified? }`, `429` with `retryAfterSeconds`
+- `POST /api/auth/login` `{ email, password }` → me payload; `401` `login_failed` (generic), `429`
+- `POST /api/auth/logout` (session)
+- `POST /api/auth/forgot` `{ email }` → always the same `{ ok, message }`
+- `POST /api/auth/reset` `{ token, password }` → me payload (new session); other sessions are revoked
+- `POST /api/account/name` `{ displayName }` (session) → me payload + board. `409` `name_taken`
+- `GET /api/players` → `{ revision, players: [{ playerName, best, bestDifficulty?, updatedAt, isYou?, legacy? }] }`
+- `POST /api/score` `{ score, difficulty, epoch?, runAccount? }` (confirmed account) → `{ ok, improved, stale, score, player, revision, players }`
+  - The player comes from the session; a name in the body is ignored. `401` signed out, `403` `csrf_failed` / `email_unverified`.
+  - The server keeps the higher of `score` and the stored best (and tags it with `difficulty` when higher), so saves can overlap, repeat or arrive out of order.
+  - `epoch`: the account's `scoreEpoch` when the run started; a score from before a reset is ignored (`stale: true`).
+  - `runAccount`: the account id the run started under; a different session account gets `409` `account_changed`.
+- `POST /api/reset-best` (confirmed account) → `{ ok, found, previousBest, player, revision, players }`. Sets your best to 0 and bumps `scoreEpoch`.
+- The old `GET/PUT /api/settings` name-only API is gone (404).
 
-```json
-{
-  "revision": 3,
-  "players": {
-    "ada": {
-      "version": 1,
-      "playerName": "Ada",
-      "muted": false,
-      "difficulty": "normal",
-      "best": 120,
-      "bestDifficulty": "hard",
-      "scoreEpoch": 0,
-      "updatedAt": "2026-09-13T12:00:00.000Z"
-    }
-  }
-}
+### Configuration
+
+All settings are environment variables (or lines in an env file: `.env` in the app folder, or the file named by `SNAKEARCADE_ENV_FILE`; real environment variables win). See [`.env.example`](.env.example) for the full list with defaults. The important ones:
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `NODE_ENV` | | `production` on the server: requires `SESSION_SECRET`, secure cookies |
+| `PORT`, `HOST` | `3023`, `localhost` | production service uses `3105` |
+| `PUBLIC_BASE_URL` | `http://localhost:PORT` | used in email links and the Origin check: `https://snakearcade.socha3.com` |
+| `SESSION_SECRET` | | 32+ random characters, secret |
+| `DB_CLIENT` | `sqlite` | `mssql` in production |
+| `SQLITE_FILE` | `data/snakearcade.db` | local only |
+| `DB_CONNECTION_STRING` | | SQL Server app login (read/write), secret |
+| `DB_MIGRATION_CONNECTION_STRING` | | optional login with DDL rights for migrations, secret |
+| `DB_MIGRATE_ON_START` | `true` | `false` if the app login can't create tables |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE` | empty, `587`, port 465 → true | empty host = write emails to `data/outbox/` |
+| `SMTP_USER`, `SMTP_PASSWORD` | | mailbox login, password is secret |
+| `MAIL_FROM`, `MAIL_REPLY_TO` | `SnakeArcade <no-reply@socha3.com>` | |
+| `RATE_LIMIT_*`, `VERIFY_TOKEN_HOURS`, `RESET_TOKEN_MINUTES` | see `.env.example` | |
+
+**Email in production** goes through the socha3.com mailbox over authenticated SMTP: port 587 with STARTTLS (`SMTP_SECURE=false`, TLS is still required) or port 465 with TLS (`SMTP_SECURE=true`). Suggested sender: a dedicated `no-reply@socha3.com` mailbox (or the existing one). The SMTP password is a server secret: set it only on the server, never commit it. Publish SPF, DKIM (and ideally DMARC) records for socha3.com so the emails don't land in spam. Details: [`docs/database-setup.md`](docs/database-setup.md).
+
+### Database & migrations
+
+SQL Server in production, SQLite locally, same schema (`migrations/mssql/*.sql` and `migrations/sqlite/*.sql`). Applied versions are recorded in `schema_migrations`; each migration runs in a transaction.
+
+```bash
+npm run migrate              # apply pending migrations
+npm run migrate -- --check   # list pending migrations (exit 1 if any)
 ```
 
-Writes use a `.lock` file (`wx` + retries/backoff/jitter), write to a temp file and rename it over `settings.json` (retrying briefly if Windows reports the file busy), and bump `revision` each successful write. A write never proceeds from an unreadable `settings.json` (that would wipe the board); the request fails instead. The HTTP server binds `localhost` only. On Windows with Node 17+ `localhost` may resolve to IPv6 `::1` only, so the IIS reverse proxy targets `http://localhost:3105` (not `127.0.0.1`); that works whether Node ends up on `::1` or `127.0.0.1`.
+`server.js` applies pending migrations on start (`DB_MIGRATE_ON_START=true`, using `DB_MIGRATION_CONNECTION_STRING` when set) and refuses to start if any are still pending. The deploy script also runs them before switching versions. Expired sessions and old tokens are purged every 6 hours.
 
-Names are filtered client- and server-side (base64 blocked list) for a professional portfolio.
+**Old leaderboard (optional):** the previous name-only board lived in `data/settings.json`. It is not used any more and is left untouched. To show those scores on the new board (tagged **legacy**, not tied to any account):
+
+```bash
+npm run import-legacy -- --dry-run   # show what would be imported
+npm run import-legacy                # import (re-running replaces, no duplicates)
+npm run import-legacy -- --clear     # remove them again
+```
+
+### Tests
+
+```bash
+npm test                      # API tests on a temporary SQLite database
+TEST_DB=mssql TEST_MSSQL_CONNECTION_STRING="Server=...;Database=SnakeArcade_Test;..." npm test
+```
+
+The SQL Server run uses an empty test database (tables are dropped afterwards); `TEST_MSSQL_DRIVER=msnodesqlv8` uses Windows authentication via the ODBC driver (needs `npm install msnodesqlv8`).
 
 ## Deploy (socha3 Windows / IIS)
 
@@ -198,20 +251,11 @@ Production target:
 - Node listens on `localhost:3105` (`PORT=3105` set by the service; on Windows Server 2025 / Node 24 this is `[::1]:3105`)
 - IIS site `SnakeArcade` reverse-proxies to `http://localhost:3105` via URL Rewrite + ARR (`web.config`). Do not point it at `127.0.0.1`: Node is not listening on IPv4 and ARR returns 502.
 
-### Before first public deploy
+### Before the first deploy with accounts
 
-Fix these in the app (not optional for a public site):
+Follow [`docs/database-setup.md`](docs/database-setup.md) (checklist at the end): SQL Server database + logins, the server env file with `SESSION_SECRET`, `DB_*`, `SMTP_*`, and SPF/DKIM for socha3.com. Without `SESSION_SECRET` and a database the service refuses to start (the health check fails and the deploy job goes red, the previous files are already replaced by then, so do the setup first).
 
-1. **Do not** serve the whole repo root with `express.static(__dirname)`. That can expose `server.js`, `package.json`, `node_modules`, and `data/settings.json`. Serve only public assets (for example a `public/` folder), or block those paths.
-2. Bind the HTTP server to loopback only, since IIS owns the public ports:
-
-```js
-app.listen(PORT, "localhost", () => {
-  console.log(`SnakeArcade listening on http://localhost:${PORT}`);
-});
-```
-
-`process.env.PORT` is already respected (local default `3023`; production service uses `3105`).
+The server binds `localhost` only (IIS owns the public ports) and serves only `public/`.
 
 ### Automatic deploy on merge to `main` (GitHub Actions)
 
@@ -219,9 +263,10 @@ app.listen(PORT, "localhost", () => {
 
 Steps: checkout, use the Node.js already installed on the server, `npm ci --omit=dev` (or `npm install --omit=dev` without a lockfile), then `scripts/deploy.ps1` (Windows PowerShell 5.1):
 
+0. Applies database migrations from the checkout (`node scripts\migrate.js`) with the server env file (`-EnvFile`, default `C:\WebApps\SnakeArcade-config\snakearcade.env`) while the old version keeps running. A failed migration stops the deploy before anything is touched. Skipped with `-SkipMigrations` or when the env file doesn't exist (the service then migrates on start).
 1. Stops `SnakeArcadeNode`.
 2. Backs up `data\settings.json` to `C:\WebApps\SnakeArcade-backups`.
-3. Mirrors the checkout into `C:\WebApps\SnakeArcade` with `robocopy /MIR`, excluding `data\`, `.git\`, `.github\`, `logs\`, `web.config`, `*.log` and the WinSW files (robocopy exit codes 0-7 = success, 8+ = failure), then verifies `settings.json` is unchanged.
+3. Mirrors the checkout into `C:\WebApps\SnakeArcade` with `robocopy /MIR`, excluding `data\`, `.git\`, `.github\`, `logs\`, `web.config`, `.env` / `*.env`, `*.log` and the WinSW files (robocopy exit codes 0-7 = success, 8+ = failure), then verifies `settings.json` is unchanged.
 4. Starts the service and polls `http://localhost:3105/api/health` until `ok: true` (the job fails otherwise), then checks the public URL. The workflow passes `-RequirePublicHealthy`, so the job fails if the public URL never returns `ok: true` (e.g. an IIS/ARR 502). Health URLs get a cache-busting query string because ARR caches `/api/health` briefly.
 
 Paths, service name and port are parameters at the top of `scripts/deploy.ps1` and in the workflow `env:`. Preview a deploy without changing anything: `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\deploy.ps1 -DryRun`.
@@ -253,7 +298,7 @@ npm ci
 # or: npm install --omit=dev
 ```
 
-4. Ensure `data\` exists and is writable by the account running `SnakeArcadeNode` (created automatically on first run if the service can write there).
+4. Ensure the env file (or WinSW `<env>` entries) is in place, see [`docs/database-setup.md`](docs/database-setup.md), and run `npm run migrate` if the app login can't create tables.
 5. Restart the Node service:
 
 ```powershell
@@ -262,7 +307,7 @@ Restart-Service SnakeArcadeNode
 
 6. Smoke-test:
 
-- Direct: `http://localhost:3105/` and `/api/settings?player=` / `/api/players`
+- Direct: `http://localhost:3105/`, `/api/health` (shows `db` and `mail` mode) and `/api/players`
 - Via IIS/Cloudflare: `https://snakearcade.socha3.com/` and `/api/players`
 
 ### Do not delete
@@ -273,5 +318,5 @@ Restart-Service SnakeArcadeNode
 
 ### Optional
 
-- `app.set("trust proxy", 1)` if you rely on client IP behind Cloudflare/ARR
+- `TRUST_PROXY` (default `true`): the app sits behind IIS/ARR (and Cloudflare) and binds `localhost` only, so it uses Cloudflare's `CF-Connecting-IP` / `X-Forwarded-For` for the visitor's IP (rate limits are per visitor). Set `false` if Node is ever reachable directly.
 - `GET /api/health` is implemented for ops checks

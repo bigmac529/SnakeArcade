@@ -29,6 +29,9 @@ env:
   APP_PORT: '3105'
   PUBLIC_URL: https://snakearcade.socha3.com/
   BACKUP_ROOT: 'C:\WebApps\SnakeArcade-backups'
+  # Server settings + secrets (NODE_ENV, SESSION_SECRET, DB_*, SMTP_*), kept on the
+  # server outside the content root. Never in this repo. See docs/database-setup.md.
+  ENV_FILE: 'C:\WebApps\SnakeArcade-config\snakearcade.env'
   # Used only if node.exe is not already on the runner's PATH.
   NODE_DIR: 'C:\Program Files\nodejs'
 
@@ -83,5 +86,6 @@ jobs:
             -Port ([int]$env:APP_PORT) `
             -PublicUrl "$env:PUBLIC_URL" `
             -BackupRoot "$env:BACKUP_ROOT" `
+            -EnvFile "$env:ENV_FILE" `
             -RequirePublicHealthy
           if ($LASTEXITCODE -ne 0) { throw "deploy.ps1 failed with exit code $LASTEXITCODE" }

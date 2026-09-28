@@ -245,7 +245,7 @@ if (-not (Test-Path -LiteralPath $node)) {
 
 $healthUrl = "http://localhost:$Port/api/health"
 $homeUrl = "http://localhost:$Port/"
-$settingsUrl = "http://localhost:$Port/api/settings?player="
+$playersUrl = "http://localhost:$Port/api/players"
 try {
   $health = Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 15
   Write-Host ("GET /api/health -> {0} {1}" -f [int]$health.StatusCode, $health.Content)
@@ -259,10 +259,10 @@ try {
   throw "Smoke test failed for ${homeUrl}: $($_.Exception.Message)"
 }
 try {
-  $settings = Invoke-WebRequest -Uri $settingsUrl -UseBasicParsing -TimeoutSec 15
-  Write-Host ("GET /api/settings -> {0}" -f [int]$settings.StatusCode)
+  $players = Invoke-WebRequest -Uri $playersUrl -UseBasicParsing -TimeoutSec 15
+  Write-Host ("GET /api/players -> {0}" -f [int]$players.StatusCode)
 } catch {
-  throw "Smoke test failed for ${settingsUrl}: $($_.Exception.Message)"
+  throw "Smoke test failed for ${playersUrl}: $($_.Exception.Message)"
 }
 
 Write-Host ""

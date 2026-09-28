@@ -760,8 +760,6 @@ input.switch:focus-visible {
 }
 
 #settings-close {
-  background: var(--accent);
-  color: #102015;
   min-width: 104px;
 }
 
@@ -932,9 +930,196 @@ html.modal-open body {
   gap: 8px;
 }
 
-#save-settings {
+/* ---- Account panel (replaces the old name box) and account dialog. */
+.primary-btn,
+#settings-close {
   background: var(--accent);
   color: #102015;
+}
+
+.account-panel .player-row {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.account-who {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.account-label {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.account-name-line {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+#account-name {
+  font-size: 1.05rem;
+  overflow-wrap: anywhere;
+}
+
+.account-panel[data-state="signedOut"] #account-name,
+.account-panel[data-state="loading"] #account-name,
+.account-panel[data-state="offline"] #account-name {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.account-badge {
+  border: 1px solid var(--accent-2);
+  border-radius: 999px;
+  color: var(--accent-2);
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+
+.account-badge[hidden],
+.account-actions button[hidden] {
+  display: none;
+}
+
+.name-hint.ok {
+  color: var(--accent);
+}
+
+.account-form {
+  display: grid;
+  gap: 12px;
+}
+
+.account-form[hidden] {
+  display: none;
+}
+
+.field {
+  display: grid;
+  gap: 5px;
+}
+
+.field > span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.field input {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 16px; /* >= 16px stops iOS zooming in on focus */
+  font-weight: 600;
+  min-height: 44px;
+  padding: 0 12px;
+  width: 100%;
+}
+
+.field input:focus-visible {
+  border-color: var(--accent);
+  outline: 2px solid rgba(134, 214, 114, 0.35);
+  outline-offset: 1px;
+}
+
+.field input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.field small {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.show-password {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 0.88rem;
+  gap: 8px;
+  min-height: 32px;
+}
+
+.show-password input {
+  accent-color: var(--accent);
+  height: 18px;
+  width: 18px;
+}
+
+.form-msg {
+  font-size: 0.9rem;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.form-msg:empty {
+  display: none;
+}
+
+.form-msg[data-tone="error"] {
+  color: var(--danger);
+}
+
+.form-msg[data-tone="ok"] {
+  color: var(--accent);
+}
+
+.form-msg[data-tone="pending"] {
+  color: var(--muted);
+}
+
+.form-switch {
+  color: var(--muted);
+  font-size: 0.88rem;
+  margin: 0;
+  text-align: center;
+}
+
+.link-btn {
+  background: none;
+  border: 0;
+  color: var(--accent);
+  font-weight: 700;
+  min-height: 32px;
+  padding: 0 2px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.link-btn:hover,
+.link-btn:focus-visible {
+  color: var(--text);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.message-text {
+  font-size: 1rem;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.board-legacy {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.65rem;
+  font-weight: 700;
+  margin-left: 6px;
+  padding: 0 5px;
+  vertical-align: middle;
 }
 
 button:disabled,
@@ -1197,8 +1382,15 @@ button:disabled,
     flex: 1 1 160px;
   }
 
-  .player-name span {
+  .player-name span,
+  .account-label {
     display: none;
+  }
+
+  .account-actions button {
+    font-size: 0.85rem;
+    min-height: 40px;
+    padding: 0 10px;
   }
 
   .name-hint {
@@ -1513,4 +1705,17 @@ html.is-fullscreen .turn-btn {
   html.is-fullscreen .turn-btn {
     flex-direction: column;
   }
+}
+
+/* Account dialog forms: buttons sit inline (the dialog is short), side by side. */
+.account-form .modal-actions {
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  position: static;
+}
+
+.account-form .modal-actions button {
+  min-width: 104px;
 }

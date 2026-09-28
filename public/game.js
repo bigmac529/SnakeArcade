@@ -73,14 +73,18 @@
   };
   const normalizeDifficulty = window.SnakeSettings.normalizeDifficulty;
 
-  const nameInput = document.querySelector("#player-name");
-  const nameHint = document.querySelector("#name-hint");
-  const saveNameBtn = document.querySelector("#save-settings");
+  // Accounts (account.js): only a signed-in account with a confirmed email
+  // can start a run; its best score lives on the server.
+  const Account = window.SnakeAccount;
+  // Id of the signed-in account ("" when signed out).
+  let accountId = "";
+  // Start overlay text, and the overlay titles that describe the start gate
+  // (replaced whenever it changes).
+  const PRESS_START = ["Press Start", "Tap Start to play. Then steer with the Left / Right buttons (or ← / → or A / D keys)."];
+  const GATE_TITLES = ["Press Start", "Loading…", "Offline", "Sign in to play", "Verify your email"];
 
-  let settings = window.SnakeSettings.loadSettings();
-  let nameSavedThisSession = false;
-  let savedNameSnapshot = "";
-  let saveInFlight = false;
+  // Sound and difficulty: per browser (localStorage).
+  const prefs = window.SnakeSettings.loadPrefs();
   // Arcade board: every render (GET or the answer to a score save) takes a
   // number; a GET whose answer arrives after a newer render is dropped, so a
   // slow or stale response can never replace a newer board.
@@ -105,7 +109,8 @@
   // add up to a 180-degree reversal inside a single step.
   let turnQueue = [];
   let score;
-  let best = Number(settings.best || 0);
+  // Best score of the signed-in account (from the server).
+  let best = 0;
   let running = false;
   let paused = false;
   let gameOver = false;
@@ -114,16 +119,16 @@
   let ticks = 0;
   // Difficulty of the current / next run. Locked in when a run starts and never
   // changed while it is in progress.
-  let runDifficulty = normalizeDifficulty(settings.difficulty);
+  let runDifficulty = normalizeDifficulty(prefs.difficulty);
   let moveDelay = DIFFICULTIES[runDifficulty].tickMs;
   let foodPulse = 0;
-  let muted = Boolean(settings.muted);
+  let muted = Boolean(prefs.muted);
   let audioCtx = null;
   let beatBestThisRun = false;
-  // Player name the current / last run belongs to (fixed when it starts):
-  // its score saves always go to this name.
-  let runPlayer = "";
-  // Score epoch of the saved player (bumped by Reset best score on the
+  // Account the current / last run belongs to (fixed when it starts): its
+  // score saves are only ever sent for this account.
+  let runAccount = "";
+  // Score epoch of the signed-in account (bumped by Reset best score on the
   // server) and the one the current / last run started under. Score saves
   // carry the run's epoch; the server ignores ones from before a reset.
   let playerEpoch = null;
@@ -162,41 +167,15 @@
   }
   let display = loadDisplay();
 
-  function applySettingsToUi(next) {
-    settings = next;
-    best = Number(next.best || 0);
-    muted = Boolean(next.muted);
-    bestEl.textContent = best;
-    if (!running) {
-      difficultyEl.value = normalizeDifficulty(next.difficulty);
-    }
-    nameInput.value = next.playerName || "";
-    updateMuteUi();
-    applyDifficulty();
-    applyName(next.playerName || "", { silent: true, persist: false });
-    updateStartGateUi();
-  }
-
   bestEl.textContent = best;
   difficultyEl.value = runDifficulty;
-  nameInput.value = settings.playerName || "";
   updateMuteUi();
-  applyName(settings.playerName || "", { silent: true, persist: false });
   updateStartGateUi();
   layoutArena();
   reset();
   requestAnimationFrame(loop);
   refreshArcadeBoard();
-
-  window.SnakeSettings.hydrateFromServer(nameInput.value).then((hydrated) => {
-    // Skip if a name was already saved this session (a fast Save name wins
-    // over this page-load read of the cached name).
-    if (!hydrated || nameSavedThisSession) {
-      return;
-    }
-    applySettingsToUi(hydrated);
-    refreshArcadeBoard();
-  });
+  Account.onChange(onAccountChange);
 
   startBtn.addEventListener("click", () => {
     if (!ensureCanStart()) {
@@ -219,14 +198,11 @@
   });
   muteBtn.addEventListener("click", toggleMute);
   overlayStartBtn.addEventListener("click", () => {
-    // In full screen the name box is hidden: without a saved name the overlay
-    // button reads "Exit full screen" and takes the player back to it.
-    if (fsMode && !canStart()) {
-      exitFullscreen();
-      ensureCanStart();
-      return;
-    }
-    if (!ensureCanStart()) {
+    // Until the account can play, the overlay button leads there instead:
+    // "Sign in" (opens the dialog), "Check again" (email confirmed in another
+    // tab or app), or in full screen "Exit full screen" first.
+    if (!canStart()) {
+      gateAction();
       return;
     }
     start();
@@ -240,10 +216,7 @@
       return;
     }
     applyDifficulty();
-    persistSettingsLocal({ difficulty: runDifficulty });
-    if (nameSavedThisSession) {
-      pushServerState({ force: true, quiet: true });
-    }
+    window.SnakeSettings.savePrefs({ difficulty: runDifficulty });
     announce(`Difficulty set to ${DIFFICULTIES[runDifficulty].label}.`);
     renderDifficultyTip();
   });
@@ -531,8 +504,8 @@
     }
   });
 
-  // ---- Settings > Reset best score. Only for the saved name (or, with no
-  // saved name, just this browser's Best). Not while a run is in progress:
+  // ---- Settings > Reset best score. Only for the signed-in account. Not
+  // while a run is in progress:
   // Settings pauses a live game, and the run's score still belongs to it, so
   // the button stays disabled until the game ends.
   const resetRow = document.querySelector("#reset-best-row");
@@ -546,19 +519,19 @@
   let resetBusy = false;
 
   function resetTarget() {
-    return nameSavedThisSession && savedNameSnapshot ? savedNameSnapshot : "";
+    return Account.state.user ? Account.state.user.displayName : "";
   }
 
   function syncResetUi() {
     const locked = runLocked();
     const name = resetTarget();
-    resetBtn.disabled = locked || resetBusy;
+    resetBtn.disabled = locked || resetBusy || !name;
     if (locked) {
       resetHint.textContent = "End the current game to reset your best.";
     } else if (name) {
-      resetHint.textContent = `Only for ${name}: sets its best (${best}) to 0 and takes it off the arcade board.`;
+      resetHint.textContent = `Only for your account (${name}): sets your best (${best}) to 0 and takes you off the arcade board.`;
     } else {
-      resetHint.textContent = `No saved name: resets the Best in this browser (${best}) only.`;
+      resetHint.textContent = "Sign in to reset your best score.";
     }
   }
 
@@ -576,9 +549,10 @@
       return;
     }
     const name = resetTarget();
-    resetQuestion.textContent = name
-      ? `Reset your best of ${best} to 0 for ${name}? This removes ${name} from the arcade board. Other names aren’t affected.`
-      : `Reset the Best in this browser (${best}) to 0? No name is saved, so the arcade board isn’t changed.`;
+    if (!name) {
+      return;
+    }
+    resetQuestion.textContent = `Reset your best of ${best} to 0 for ${name}? This removes ${name} from the arcade board. Other players aren’t affected.`;
     setResetResult("");
     resetRow.hidden = true;
     resetConfirm.hidden = false;
@@ -598,7 +572,6 @@
   }
 
   function applyLocalBestReset() {
-    settings = window.SnakeSettings.resetLocalBest();
     best = 0;
     bestEl.textContent = "0";
     bestEl.classList.remove("best-flash");
@@ -610,17 +583,14 @@
     }
     const name = resetTarget();
     if (!name) {
-      applyLocalBestReset();
       closeResetConfirm();
-      setResetResult("Best in this browser reset to 0.", "ok");
-      announce("Best reset to 0.");
       return;
     }
     resetBusy = true;
     resetYes.disabled = true;
     resetCancel.disabled = true;
     setResetResult("Resetting…");
-    const result = await window.SnakeSettings.resetBestOnServer(name);
+    const result = await window.SnakeSettings.resetBestOnServer();
     resetBusy = false;
     if (!result.ok) {
       // Nothing changed locally either, so the two stay in step.
@@ -630,15 +600,16 @@
       return;
     }
     // Scores from before the reset must not bring the old best back: drop
-    // this name's queued and unsaved ones; an in-flight one carries the old
-    // epoch, which the server now ignores.
+    // this account's queued and unsaved ones; an in-flight one carries the
+    // old epoch, which the server now ignores.
     playerEpoch = Number((result.player && result.player.scoreEpoch) || 0);
-    scoreQueue = scoreQueue.filter((q) => q.name !== name);
-    if (unsavedScore && unsavedScore.name === name) {
+    scoreQueue = scoreQueue.filter((q) => q.account !== accountId);
+    if (unsavedScore && unsavedScore.account === accountId) {
       unsavedScore = null;
       setBoardStatus("");
     }
     applyLocalBestReset();
+    Account.patchUser({ best: 0, bestDifficulty: null, scoreEpoch: playerEpoch });
     boardSeq += 1;
     renderBoard(result.players, result.revision);
     if (boardEl) {
@@ -653,139 +624,6 @@
   resetBtn.addEventListener("click", openResetConfirm);
   resetCancel.addEventListener("click", () => closeResetConfirm());
   resetYes.addEventListener("click", confirmReset);
-
-  nameInput.addEventListener("input", () => {
-    // Changing the name clears the session "saved" gate.
-    if (nameSavedThisSession) {
-      nameSavedThisSession = false;
-      savedNameSnapshot = "";
-      updateStartGateUi();
-      nameHint.textContent = "Name changed — save it before you can start.";
-      nameHint.classList.remove("error");
-    }
-  });
-  nameInput.addEventListener("change", () => {
-    applyName(nameInput.value, { persist: false });
-  });
-  nameInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      saveNameBtn.click();
-    }
-  });
-
-  saveNameBtn.addEventListener("click", async () => {
-    // The name can't change while a run is live or paused (its score belongs
-    // to the name it started with).
-    if (saveInFlight || runLocked()) {
-      return;
-    }
-    if (!applyName(nameInput.value, { persist: false })) {
-      updateStartGateUi();
-      return;
-    }
-
-    saveInFlight = true;
-    saveNameBtn.disabled = true;
-    nameHint.textContent = "Saving name to arcade board…";
-    nameHint.classList.remove("error");
-
-    try {
-      // No best in the draft: the name's best comes from the server (0 for a
-      // new name), never from this browser's previous name. (saveToServer
-      // never sends one either; this keeps the previous name's best out of
-      // the draft altogether.)
-      const { best: _prevBest, bestDifficulty: _prevBestDifficulty, ...carried } = settings;
-      const draft = {
-        ...carried,
-        playerName: nameInput.value.trim(),
-        muted,
-        difficulty: selectedDifficulty()
-      };
-
-      // An existing name was claimed (it keeps its own best).
-      let claimed = false;
-      let result = await window.SnakeSettings.saveToServer(draft, {
-        force: false,
-        baseRevision: window.SnakeSettings.getKnownRevision()
-      });
-
-      if (!result.ok && result.error === "name_exists") {
-        const existingBest = result.existing ? Number(result.existing.best || 0) : 0;
-        const existingLabel =
-          (result.existing && result.existing.playerName) || draft.playerName;
-        // Claiming a name keeps that name's own best (it never takes this
-        // browser's previous best, and it doesn't reset it either). Say so,
-        // so an existing name isn't mistaken for a new one.
-        const ok = window.confirm(
-          existingBest > 0
-            ? `"${existingLabel}" is already on the arcade board with a best of ${existingBest}.\n\nPlay as "${existingLabel}"? Its best of ${existingBest} stays with the name. To start it from 0, use Settings > Reset best score after saving.`
-            : `"${existingLabel}" is already taken (no score on the arcade board yet).\n\nPlay as "${existingLabel}"?`
-        );
-        if (!ok) {
-          nameHint.textContent = "Save cancelled — that name is already taken.";
-          nameHint.classList.add("error");
-          announce("Save cancelled.");
-          return;
-        }
-        claimed = true;
-        result = await window.SnakeSettings.saveToServer(draft, {
-          force: true,
-          baseRevision: result.revision != null
-            ? result.revision
-            : window.SnakeSettings.getKnownRevision()
-        });
-      }
-
-      if (!result.ok) {
-        if (result.error === "revision_conflict") {
-          nameHint.textContent =
-            "Arcade board changed while saving. Refreshing board — try Save name again.";
-          await refreshArcadeBoard();
-        } else if (result.error === "lock_busy") {
-          nameHint.textContent =
-            "Arcade board is busy (another save in progress). Please try again.";
-        } else {
-          nameHint.textContent = result.message || "Could not save name.";
-        }
-        nameHint.classList.add("error");
-        announce(result.message || "Could not save name.");
-        return;
-      }
-
-      const previousName = savedNameSnapshot || settings.playerName || "";
-      settings = result.settings;
-      best = Number(settings.best || 0);
-      bestEl.textContent = best;
-      bestEl.classList.remove("best-flash");
-      nameSavedThisSession = true;
-      savedNameSnapshot = settings.playerName;
-      playerEpoch = Number((result.data && result.data.scoreEpoch) || 0);
-      if (previousName !== savedNameSnapshot) {
-        // The last game's "Saved: …" line was about the previous name. An
-        // unsaved score stays listed (it names its player).
-        if (unsavedScore) {
-          showUnsavedScore();
-        } else {
-          setBoardStatus("");
-        }
-      }
-      nameHint.textContent = claimed && best > 0
-        ? `Saved as ${settings.playerName}. This name already has a best of ${best}. You’re cleared to Start.`
-        : `Saved as ${settings.playerName}. You’re cleared to Start.`;
-      nameHint.classList.remove("error");
-      announce(`Name saved: ${settings.playerName}.`);
-      updateStartGateUi();
-      await refreshArcadeBoard();
-    } catch (_) {
-      nameHint.textContent = "Network error while saving name.";
-      nameHint.classList.add("error");
-      announce("Network error while saving name.");
-    } finally {
-      saveInFlight = false;
-      updateStartGateUi();
-    }
-  });
 
   turnButtons.forEach((btn) => {
     // pointerdown fires immediately on touch (no 300ms click delay); the CSS
@@ -844,7 +682,7 @@
   document.addEventListener("keydown", (event) => {
     // The Settings dialog owns the keyboard while it is open (the game is
     // paused behind it; Space on its Close button must not resume play).
-    if (isSettingsOpen()) {
+    if (isSettingsOpen() || Account.isDialogOpen()) {
       return;
     }
     // Typing a name (or other form field) must never move/start the snake.
@@ -941,64 +779,147 @@
     return running && !gameOver;
   }
 
+  // A new run needs a signed-in account with a confirmed email. (A run in
+  // progress can always be resumed.)
   function canStart() {
-    if (!nameSavedThisSession) {
-      return false;
+    return runLocked() || Account.state.status === "verified";
+  }
+
+  // What stands between the player and Start, or null when they can play.
+  function gate() {
+    if (canStart()) {
+      return null;
     }
-    const check = window.SnakeSettings.validatePlayerName(nameInput.value);
-    if (!check.ok || check.name.length < 2) {
-      return false;
+    const s = Account.state.status;
+    if (s === "loading") {
+      return { title: "Loading…", message: "Checking your account.", fsMessage: "Checking your account.", label: "Start game", action: false, hint: "Checking your account…" };
     }
-    if (savedNameSnapshot && check.name !== savedNameSnapshot) {
-      return false;
+    if (s === "offline") {
+      return { title: "Offline", message: "Couldn’t reach the server. Reload the page to try again.", fsMessage: "Couldn’t reach the server. Exit full screen and reload.", label: "Start game", action: false, hint: "Server not reachable" };
     }
-    return true;
+    if (s === "unverified") {
+      return {
+        title: "Verify your email",
+        message: "Open the link we emailed you, then press Start. No email? Check spam, or use Resend email above.",
+        fsMessage: "Exit full screen, then confirm your email to play.",
+        label: "Check again",
+        action: true,
+        hint: "Confirm your email first"
+      };
+    }
+    return {
+      title: "Sign in to play",
+      message: "Sign up (free) or sign in to play and post scores to the arcade board.",
+      fsMessage: "Exit full screen to sign in or sign up.",
+      label: "Sign in",
+      action: true,
+      hint: "Sign in first"
+    };
+  }
+
+  function gateOverlay() {
+    const g = gate();
+    return g ? [g.title, g.message] : PRESS_START;
+  }
+
+  // Overlay button while the gate is closed.
+  async function gateAction() {
+    const status = Account.state.status;
+    if (fsMode) {
+      exitFullscreen();
+    }
+    if (status === "signedOut") {
+      Account.openDialog("signin");
+    } else if (status === "unverified") {
+      await Account.refresh();
+      if (Account.state.status === "unverified") {
+        announce("Your email isn’t confirmed yet. Open the link we emailed you.");
+      } else if (Account.state.status === "verified") {
+        announce("Email confirmed. Press Start to play.");
+      }
+    }
   }
 
   function ensureCanStart() {
     if (canStart()) {
       return true;
     }
-    const check = window.SnakeSettings.validatePlayerName(nameInput.value);
-    const msg = !check.ok
-      ? check.message
-      : "Save your name before starting.";
-    nameHint.textContent = msg;
-    nameHint.classList.add("error");
-    announce(msg);
+    const g = gate();
+    announce(g ? g.message : "You can’t start yet.");
     updateStartGateUi();
-    nameInput.focus({ preventScroll: true });
     return false;
   }
 
   function updateStartGateUi() {
     const ok = canStart();
-    startBtn.disabled = !ok || saveInFlight;
-    // In full screen without a name the overlay button is "Exit full screen".
-    overlayStartBtn.disabled = (!ok && !fsMode) || saveInFlight;
-    saveNameBtn.disabled = saveInFlight || runLocked();
-    startBtn.title = ok ? "Start game" : "Save a PG name first";
-    overlayStartBtn.title = startBtn.title;
-    if (overlay && !overlay.classList.contains("hidden")) {
-      const title = overlay.querySelector("h2");
-      if (title && (title.textContent === "Press Start" || title.textContent === "Save a name")) {
-        if (!ok) {
-          setOverlay(
-            "Save a name",
-            "Pick a PG name (2+ characters), tap Save name, then Start."
-          );
-        } else if (!running && !gameOver) {
-          setOverlay(
-            "Press Start",
-            "Tap Start to play. Then steer with the Left / Right buttons (or ← / → or A / D keys)."
-          );
-        }
+    const g = gate();
+    startBtn.disabled = !ok;
+    // The overlay button stays usable when it leads somewhere (sign in,
+    // check again, exit full screen).
+    overlayStartBtn.disabled = !ok && !fsMode && !(g && g.action);
+    startBtn.title = ok ? "Start game" : (g && g.hint) || "";
+    overlayStartBtn.title = ok ? "Start game" : (g && g.hint) || "";
+    if (overlay && !overlay.classList.contains("hidden") && !runLocked()) {
+      // Show the gate (also over a finished game's result once signed out);
+      // once it opens, the gate text turns into "Press Start".
+      const wanted = g ? [g.title, g.message] : GATE_TITLES.includes(overlayTitle) ? PRESS_START : null;
+      if (wanted && (wanted[0] !== overlayTitle || wanted[1] !== overlayMessage)) {
+        setOverlay(wanted[0], wanted[1]);
+        return;
       }
     }
+    renderOverlay();
+  }
+
+  // Session changes from account.js (sign in / out, email confirmed, name
+  // change, score fields from a save).
+  function onAccountChange(state, reason, payload) {
+    if (reason === "dialogOpen") {
+      if (isLivePlay()) {
+        togglePause();
+      }
+      hideDifficultyTip();
+      return;
+    }
+    if (reason === "dialogClose") {
+      return;
+    }
+    if (reason === "board") {
+      if (payload && Array.isArray(payload.players)) {
+        boardSeq += 1;
+        renderBoard(payload.players, payload.revision);
+      }
+      return;
+    }
+    const user = state.user;
+    const nextId = user ? user.id : "";
+    const switched = nextId !== accountId;
+    accountId = nextId;
+    playerEpoch = user ? Number(user.scoreEpoch || 0) : null;
+    const serverBest = user ? Number(user.best || 0) : 0;
+    // Mid-run the Best box may already show this run's higher score.
+    best = runLocked() ? Math.max(best, serverBest) : serverBest;
+    bestEl.textContent = best;
+    if (switched) {
+      // Board status lines and a failed save belonged to the previous account.
+      if (unsavedScore && unsavedScore.account !== nextId) {
+        unsavedScore = null;
+      }
+      if (unsavedScore) {
+        showUnsavedScore();
+      } else {
+        setBoardStatus("");
+      }
+      refreshArcadeBoard();
+    } else if (reason === "verified" || reason === "rename") {
+      refreshArcadeBoard();
+    }
+    updateStartGateUi();
+    syncResetUi();
   }
 
   function start() {
-    if (!ensureCanStart()) {
+    if (!running && !ensureCanStart()) {
       return;
     }
     ensureAudio();
@@ -1012,7 +933,7 @@
     if (!running) {
       // Fresh run: lock in difficulty and take the first step on the next frame.
       applyDifficulty();
-      runPlayer = savedNameSnapshot;
+      runAccount = accountId;
       runEpoch = playerEpoch;
       lastMove = performance.now() - moveDelay;
     } else if (paused) {
@@ -1054,106 +975,12 @@
 
   function toggleMute() {
     muted = !muted;
-    persistSettingsLocal({ muted });
+    window.SnakeSettings.savePrefs({ muted });
     updateMuteUi();
-    if (nameSavedThisSession) {
-      pushServerState({ force: true, quiet: true });
-    }
     if (!muted) {
       ensureAudio();
       beep(440, 0.04, "sine", 0.03);
     }
-  }
-
-  function persistSettingsLocal(patch = {}) {
-    const merged = {
-      ...settings,
-      playerName: nameSavedThisSession
-        ? savedNameSnapshot || nameInput.value.trim()
-        : (settings.playerName || ""),
-      muted,
-      difficulty: selectedDifficulty(),
-      best,
-      ...patch
-    };
-    const nameCheck = window.SnakeSettings.validatePlayerName(merged.playerName);
-    // Never persist a rejected name from the input box via mute/difficulty/score saves.
-    merged.playerName = nameCheck.ok ? nameCheck.name : (settings.playerName || "");
-    settings = window.SnakeSettings.cacheSettings(merged);
-    return settings;
-  }
-
-  async function pushServerState({ force = true, quiet = false } = {}) {
-    if (!nameSavedThisSession || !savedNameSnapshot) {
-      return;
-    }
-    // Name, mute and difficulty only: scores reach the server through
-    // POST /api/score, never with a settings save.
-    const { best: _best, bestDifficulty: _bestDifficulty, ...carried } = settings;
-    const draft = {
-      ...carried,
-      playerName: savedNameSnapshot,
-      muted,
-      difficulty: selectedDifficulty()
-    };
-    try {
-      const result = await window.SnakeSettings.saveToServer(draft, {
-        force,
-        baseRevision: window.SnakeSettings.getKnownRevision()
-      });
-      if (result.ok) {
-        settings = result.settings;
-        if (result.revision != null) {
-          await refreshArcadeBoard();
-        }
-      } else if (!quiet) {
-        announce(result.message || "Could not sync score.");
-      } else if (result.error === "revision_conflict" || result.error === "lock_busy") {
-        // Soft retry once for background settings sync (mute / difficulty).
-        const retry = await window.SnakeSettings.saveToServer(draft, {
-          force: true,
-            baseRevision: result.revision != null
-            ? result.revision
-            : window.SnakeSettings.getKnownRevision()
-        });
-        if (retry.ok) {
-          settings = retry.settings;
-          await refreshArcadeBoard();
-        }
-      }
-    } catch (_) {
-      /* ignore background sync errors */
-    }
-  }
-
-  function applyName(raw, { persist = false, silent = false } = {}) {
-    const result = window.SnakeSettings.validatePlayerName(raw);
-    nameInput.classList.toggle("invalid", !result.ok);
-    if (!result.ok) {
-      nameHint.textContent = result.message;
-      nameHint.classList.add("error");
-      if (!silent) {
-        announce(result.message);
-      }
-      updateStartGateUi();
-      return false;
-    }
-
-    nameInput.value = result.name;
-    if (!nameSavedThisSession || result.name !== savedNameSnapshot) {
-      nameHint.textContent = `${result.message} Tap Save name to claim it on the arcade board.`;
-    } else {
-      nameHint.textContent = `${result.message} Saved this session — Start when ready.`;
-    }
-    nameHint.classList.remove("error");
-    if (persist) {
-      persistSettingsLocal({ playerName: result.name });
-    }
-    if (!silent) {
-      announce(result.message);
-    }
-    updateStartGateUi();
-    return true;
   }
 
   function updateMuteUi() {
@@ -1202,8 +1029,11 @@
       players.forEach((p, index) => {
         const li = document.createElement("li");
         li.className = "board-row";
-        if (savedNameSnapshot && p.playerName === savedNameSnapshot) {
+        if (p.isYou) {
           li.classList.add("is-you");
+        }
+        if (p.legacy) {
+          li.classList.add("is-legacy");
         }
         const rank = document.createElement("span");
         rank.className = "board-rank";
@@ -1211,6 +1041,13 @@
         const name = document.createElement("span");
         name.className = "board-name";
         name.textContent = p.playerName;
+        if (p.legacy) {
+          const tag = document.createElement("span");
+          tag.className = "board-legacy";
+          tag.textContent = "legacy";
+          tag.title = "From the old name-only board (before accounts)";
+          name.appendChild(tag);
+        }
         const pts = document.createElement("span");
         pts.className = "board-best";
         pts.textContent = String(p.best);
@@ -1257,18 +1094,19 @@
 
   // ---- Score saving. New bests during a run and every game over / End game
   // go through this queue: one request at a time, only the highest waiting
-  // score per player is sent (the server keeps the max, so order never
+  // score per account is sent (the server keeps the max, so order never
   // matters), transient failures retry with backoff, and the board is
   // rendered from the server's answer to the save itself. A save that still
   // fails is shown on the board with a Retry button.
 
-  // `name` is the player the score belongs to (the run's player), never
-  // simply whoever is saved now.
-  function queueScore(name, value, difficulty, { final = false, epoch = null } = {}) {
-    if (!name) {
+  // `account` is the account id the score belongs to (the run's account).
+  // The server takes the player from the session; the id rides along so a
+  // score is never credited to a different account signed in since.
+  function queueScore(account, value, difficulty, { final = false, epoch = null } = {}) {
+    if (!account) {
       return Promise.resolve();
     }
-    const item = scoreQueue.find((q) => q.name === name);
+    const item = scoreQueue.find((q) => q.account === account);
     if (item) {
       if (value > item.score) {
         item.score = value;
@@ -1279,17 +1117,17 @@
         item.runScore = value;
       }
     } else {
-      scoreQueue.push({ name, score: value, difficulty, final, runScore: final ? value : null, epoch });
+      scoreQueue.push({ account, score: value, difficulty, final, runScore: final ? value : null, epoch });
     }
     // A score that failed to save earlier rides along (the max is kept).
-    if (final && unsavedScore && unsavedScore.name === name) {
-      const q = scoreQueue.find((x) => x.name === name);
+    if (final && unsavedScore && unsavedScore.account === account) {
+      const q = scoreQueue.find((x) => x.account === account);
       if (unsavedScore.score > q.score) {
         q.score = unsavedScore.score;
         q.difficulty = unsavedScore.difficulty;
       }
     }
-    if (final && name === savedNameSnapshot) {
+    if (final && account === accountId) {
       setBoardStatus("Saving your score…", "pending");
     }
     if (!scorePump) {
@@ -1304,10 +1142,18 @@
   }
 
   async function sendScore(item) {
+    if (item.account !== accountId) {
+      // Signed out (or into another account) before this was sent: it can't
+      // be saved for its account from here, and must not go to the new one.
+      if (item.final) {
+        setBoardStatus(`A score of ${item.score} wasn’t saved: you signed out before it was sent.`, "error", { kind: "save" });
+      }
+      return;
+    }
     let result;
     for (let attempt = 0; ; attempt += 1) {
       try {
-        result = await window.SnakeSettings.submitScore(item.name, item.score, item.difficulty, item.epoch);
+        result = await window.SnakeSettings.submitScore(item.score, item.difficulty, item.epoch, item.account);
       } catch (err) {
         result = { ok: false, retryable: true, message: String(err && err.message) };
       }
@@ -1316,16 +1162,23 @@
       }
       await new Promise((r) => setTimeout(r, SCORE_RETRY_MS[attempt]));
     }
+    if (item.account !== accountId) {
+      return;
+    }
 
-    // A score from before a Reset best score of the saved player: its answer
-    // (or failure) must not bring the old best back here.
-    const preReset = item.name === savedNameSnapshot && playerEpoch != null && item.epoch != null && item.epoch < playerEpoch;
+    // A score from before a Reset best score: its answer (or failure) must
+    // not bring the old best back here.
+    const preReset = playerEpoch != null && item.epoch != null && item.epoch < playerEpoch;
     if (!result.ok) {
       if (preReset) {
         return;
       }
-      if (!unsavedScore || unsavedScore.name !== item.name || item.score > unsavedScore.score) {
-        unsavedScore = { name: item.name, score: item.score, difficulty: item.difficulty, epoch: item.epoch };
+      if (result.error === "account_changed") {
+        setBoardStatus(result.message, "error", { kind: "save" });
+        return;
+      }
+      if (!unsavedScore || unsavedScore.account !== item.account || item.score > unsavedScore.score) {
+        unsavedScore = { account: item.account, score: item.score, difficulty: item.difficulty, epoch: item.epoch };
       }
       showUnsavedScore(result.message);
       announce(boardStatusTextEl ? boardStatusTextEl.textContent : "Couldn’t save your score.");
@@ -1336,31 +1189,32 @@
     }
 
     const respEpoch = Number((result.player && result.player.scoreEpoch) || 0);
-    if (result.stale && item.name === savedNameSnapshot && (playerEpoch == null || respEpoch > playerEpoch)) {
-      // The name's best was reset elsewhere (another browser): this run's
-      // score doesn't count, the next run's will.
+    if (result.stale && (playerEpoch == null || respEpoch > playerEpoch)) {
+      // The best was reset elsewhere (another browser): this run's score
+      // doesn't count, the next run's will.
       playerEpoch = respEpoch;
+      Account.patchUser({ scoreEpoch: respEpoch, best: Number((result.player && result.player.best) || 0) });
     }
-    if (preReset || result.stale || (item.name === savedNameSnapshot && playerEpoch != null && respEpoch < playerEpoch)) {
+    if (preReset || result.stale || (playerEpoch != null && respEpoch < playerEpoch)) {
       // Answered from before the reset (or ignored as stale): re-read the board
       // instead of drawing this answer.
       if (item.final && boardStatusKind === "pending") {
-        setBoardStatus("That score wasn’t counted: this name’s best was reset.", "ok", { kind: "save" });
+        setBoardStatus("That score wasn’t counted: your best was reset.", "ok", { kind: "save" });
       }
       refreshArcadeBoard();
       return;
     }
     const serverBest = Number((result.player && result.player.best) || 0);
-    if (unsavedScore && unsavedScore.name === item.name && unsavedScore.score <= serverBest) {
+    if (unsavedScore && unsavedScore.account === item.account && unsavedScore.score <= serverBest) {
       unsavedScore = null;
     }
-    // The server is the source of truth for the best on the board; pick up a
-    // higher one (e.g. set on another device).
-    if (item.name === savedNameSnapshot && serverBest > best) {
+    // The server is the source of truth for the best; pick up a higher one
+    // (e.g. set on another device).
+    if (serverBest > best) {
       best = serverBest;
       bestEl.textContent = best;
-      persistSettingsLocal({ best, bestDifficulty: result.player.bestDifficulty });
     }
+    Account.patchUser({ best: serverBest, bestDifficulty: (result.player && result.player.bestDifficulty) || null, scoreEpoch: respEpoch });
     boardSeq += 1;
     renderBoard(result.players, result.revision);
     if (boardEl) {
@@ -1368,16 +1222,14 @@
       boardEl.dataset.savedBest = String(serverBest);
     }
     if (unsavedScore) {
-      // Another player's (pre-rename) score still failed: keep that visible.
       showUnsavedScore();
     } else if (item.final) {
       const run = item.runScore != null ? item.runScore : item.score;
-      const whose = item.name === savedNameSnapshot ? "your" : `${item.name}’s`;
       setBoardStatus(
         run > 0 && run >= serverBest
-          ? `Saved: ${run} is ${whose} best on the arcade board.`
+          ? `Saved: ${run} is your best on the arcade board.`
           : run > 0
-            ? `Score ${run}. The board keeps ${whose} best: ${serverBest}.`
+            ? `Score ${run}. The board keeps your best: ${serverBest}.`
             : "Score 0. Eat a dot to get on the arcade board.",
         "ok",
         { kind: "save" }
@@ -1387,8 +1239,7 @@
     }
   }
 
-  // Error line for a score that didn't save; it names the player when that
-  // isn't the name saved now (after a rename it still belongs to them).
+  // Error line for a score that didn't save (with a Retry button).
   let unsavedReason = "";
   function showUnsavedScore(reason) {
     if (!unsavedScore) {
@@ -1397,9 +1248,8 @@
     if (reason) {
       unsavedReason = reason;
     }
-    const who = unsavedScore.name === savedNameSnapshot ? "" : ` for ${unsavedScore.name}`;
     setBoardStatus(
-      `Couldn’t save your score of ${unsavedScore.score}${who} to the arcade board: ${unsavedReason || "unknown error"}`,
+      `Couldn’t save your score of ${unsavedScore.score} to the arcade board: ${unsavedReason || "unknown error"}`,
       "error",
       { kind: "save", retry: true }
     );
@@ -1408,8 +1258,8 @@
   if (boardRetryBtn) {
     boardRetryBtn.addEventListener("click", () => {
       if (unsavedScore) {
-        // Always re-sent for the player who scored it.
-        queueScore(unsavedScore.name, unsavedScore.score, unsavedScore.difficulty, { final: true, epoch: unsavedScore.epoch });
+        // Always re-sent for the account that scored it.
+        queueScore(unsavedScore.account, unsavedScore.score, unsavedScore.difficulty, { final: true, epoch: unsavedScore.epoch });
       } else {
         setBoardStatus("");
         refreshArcadeBoard();
@@ -1444,14 +1294,7 @@
     overlay.querySelector("p").classList.remove("new-best");
     pauseBtn.textContent = "Pause";
     food = placeFood();
-    if (canStart()) {
-      setOverlay("Press Start", "Tap Start to play. Then steer with the Left / Right buttons (or ← / → or A / D keys).");
-    } else {
-      setOverlay(
-        "Save a name",
-        "Pick a PG name (2+ characters), tap Save name, then Start."
-      );
-    }
+    setOverlay(...gateOverlay());
     updateStartGateUi();
     updatePlayState();
     draw();
@@ -1578,10 +1421,9 @@
       best = score;
       bestEl.textContent = best;
       bestEl.classList.add("best-flash");
-      persistSettingsLocal({ best, bestDifficulty: runDifficulty });
       // Save the new best right away (so it counts even if the tab is closed
       // mid-run); the queue sends only the latest if several are waiting.
-      queueScore(runPlayer, score, runDifficulty, { epoch: runEpoch });
+      queueScore(runAccount, score, runDifficulty, { epoch: runEpoch });
       if (!beatBestThisRun) {
         beatBestThisRun = true;
         beep(880, 0.08, "sine", 0.04);
@@ -1656,12 +1498,9 @@
     } else {
       overlay.querySelector("p").classList.remove("new-best");
     }
-    // A score that failed to save earlier is re-sent now too, always for the
-    // player who scored it (queueScore merges it if that's this run's player).
-    if (unsavedScore && unsavedScore.name !== runPlayer) {
-      queueScore(unsavedScore.name, unsavedScore.score, unsavedScore.difficulty, { final: true, epoch: unsavedScore.epoch });
-    }
-    queueScore(runPlayer, score, runDifficulty, { final: true, epoch: runEpoch });
+    // A score that failed to save earlier rides along (queueScore merges it:
+    // it always belongs to the signed-in account).
+    queueScore(runAccount, score, runDifficulty, { final: true, epoch: runEpoch });
   }
 
   function draw() {
@@ -2006,10 +1845,9 @@
     // No difficulty changes while a run is live or paused.
     const locked = runLocked();
     difficultyEl.disabled = locked;
-    // Same for the player name: a run's score belongs to the name it started with.
-    nameInput.readOnly = locked;
-    nameInput.title = locked ? "End this game to change your name" : "";
-    saveNameBtn.disabled = locked || saveInFlight;
+    // Same for Edit name / Sign out: a run's score belongs to the account it
+    // started with.
+    Account.setLocked(locked);
     // End game only makes sense while a run is live or paused.
     endBtn.disabled = !locked;
     endBtn.title = locked ? "End this game now" : "No game in progress";
@@ -2154,11 +1992,14 @@
     const title = overlayTitle;
     let message = overlayMessage;
     let label = "Start game";
-    if (fsMode && title) {
-      if (!canStart()) {
-        message = "Exit full screen, save your name, then start.";
-        label = "Exit full screen";
-      } else if (title === "Paused") {
+    const g = gate();
+    if (g) {
+      label = fsMode ? "Exit full screen" : g.label;
+      if (fsMode && title) {
+        message = g.fsMessage;
+      }
+    } else if (fsMode && title) {
+      if (title === "Paused") {
         message = "Tap Resume or press P.";
         label = "Resume";
       } else if (gameOver) {
@@ -2236,7 +2077,7 @@
   }
 
   function enterFullscreen() {
-    if (fsMode || isSettingsOpen()) {
+    if (fsMode || isSettingsOpen() || Account.isDialogOpen()) {
       return;
     }
     hideDifficultyTip();

@@ -2,12 +2,22 @@
   "name": "snake-arcade",
   "version": "1.0.0",
   "private": true,
-  "description": "SnakeArcade — HTML5 Canvas snake with Express settings API",
+  "description": "SnakeArcade: HTML5 Canvas snake with accounts and a leaderboard (Express, SQL Server or SQLite)",
   "scripts": {
     "start": "node scripts/start.js",
-    "dev": "node scripts/start.js"
+    "dev": "node scripts/start.js",
+    "serve": "node server.js",
+    "migrate": "node scripts/migrate.js",
+    "import-legacy": "node scripts/import-legacy.js",
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "helmet": "^8.3.0",
+    "mssql": "^12.7.2",
+    "nodemailer": "^10.0.11"
+  },
+  "engines": {
+    "node": ">=22.13"
   }
 }
