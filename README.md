@@ -120,7 +120,7 @@ While a run is live on a phone, the name panel, extra buttons, and Arcade board 
 
 Enter a PG player name (2+ characters) and tap **Save name**. That writes name + mute/difficulty to `data/settings.json` via `PUT /api/settings`, never a best score. Guest / empty names cannot start.
 
-If the name already exists on the server, the UI asks for confirmation (shows the existing best score) and only claims it after you confirm (`force: true`). Claiming keeps that name's own best.
+If the name already exists on the server, the UI asks for confirmation and only claims it after you confirm (`force: true`). Claiming keeps that name's own best, and the question says so: *"NAME" is already on the arcade board with a best of N. Play as "NAME"? Its best of N stays with the name. To start it from 0, use Settings > Reset best score after saving.* After claiming, the name hint repeats the kept best. A brand-new name always starts at 0: Save name never sends a best score (only `POST /api/score` changes a best), and the server ignores one in a settings save.
 
 **A new name is a new player.** The Best box shows the saved name's best from the server: 0 for a new name, and the name's own best for an existing one. It is never this browser's best from a previous name, and the old name's board entry stays as it was. A name only appears on the board once a run played under it scores more than 0. Scores always go to the name the run started with. The name box and Save name are locked while a run is live or paused, and a score that failed to save stays with the name that scored it, even after a rename. On reload, the Best box takes the cached name's best from the server (0 if the name has no record).
 
