@@ -413,6 +413,27 @@ canvas:focus-visible {
   justify-content: center;
 }
 
+.fullscreen-btn {
+  align-items: center;
+  display: inline-flex;
+  -webkit-tap-highlight-color: transparent;
+  gap: 7px;
+  justify-content: center;
+}
+
+.fullscreen-btn svg,
+.fs-icon-btn svg {
+  fill: none;
+  flex: none;
+  height: 1.15em;
+  pointer-events: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+  width: 1.15em;
+}
+
 .settings-btn svg {
   fill: none;
   flex: none;
@@ -1210,6 +1231,12 @@ button:disabled,
     padding: 0 12px;
   }
 
+  .fullscreen-btn {
+    font-size: 0.85rem;
+    order: -1;
+    padding: 0 12px;
+  }
+
   .controls button,
   .difficulty select {
     font-size: 0.85rem;
@@ -1245,6 +1272,7 @@ button:disabled,
   .is-playing #end-game,
   .is-playing #mute,
   .is-playing .settings-btn,
+  .is-playing .fullscreen-btn,
   .is-playing .difficulty {
     display: none;
   }
@@ -1289,6 +1317,15 @@ button:disabled,
   }
 }
 
+/* Narrow phones: Difficulty, Settings and Full screen still share one row. */
+@media (max-width: 389px) {
+  .settings-btn,
+  .fullscreen-btn {
+    gap: 5px;
+    padding: 0 8px;
+  }
+}
+
 /* Phone held sideways: buttons flank the arena. */
 @media (orientation: landscape) and (max-height: 540px) {
   .stage {
@@ -1309,5 +1346,171 @@ button:disabled,
 
   .is-playing .title-block {
     display: none;
+  }
+}
+
+/* ---------- Full screen ----------
+   Only the current score, the board and the Left / Right buttons (plus a
+   small Pause / Exit pair). html.is-fullscreen is set both for the real
+   Fullscreen API (the stage is the full-screen element) and for the CSS
+   "immersive" fallback, where the stage is pinned over the whole viewport
+   and everything else on the page is hidden (not just covered). */
+.fs-score,
+.fs-controls {
+  display: none;
+}
+
+html.is-fullscreen,
+html.is-fullscreen body {
+  overflow: hidden;
+}
+
+html.is-fullscreen .shell {
+  visibility: hidden;
+}
+
+html.is-fullscreen .stage,
+.stage:fullscreen {
+  background: var(--bg);
+}
+
+html.is-fullscreen .stage {
+  align-items: stretch;
+  box-sizing: border-box;
+  gap: 8px;
+  grid-template-areas:
+    "score ctl"
+    "arena arena"
+    "left right";
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) clamp(72px, 20dvh, 200px);
+  height: 100%;
+  height: 100dvh;
+  inset: 0;
+  margin: 0;
+  overscroll-behavior: none;
+  padding:
+    max(8px, env(safe-area-inset-top))
+    max(8px, env(safe-area-inset-right))
+    max(8px, env(safe-area-inset-bottom))
+    max(8px, env(safe-area-inset-left));
+  position: fixed;
+  touch-action: none;
+  visibility: visible;
+  width: 100%;
+  z-index: 40;
+}
+
+html.is-fullscreen .fs-score {
+  align-items: baseline;
+  align-self: center;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: inline-flex;
+  gap: 8px;
+  grid-area: score;
+  justify-self: start;
+  padding: 4px 12px;
+}
+
+html.is-fullscreen .fs-score span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+html.is-fullscreen .fs-score strong {
+  font-size: 1.35rem;
+  font-variant-numeric: tabular-nums;
+}
+
+html.is-fullscreen .fs-controls {
+  align-items: center;
+  align-self: start;
+  display: flex;
+  gap: 6px;
+  grid-area: ctl;
+  justify-content: flex-end;
+}
+
+.fs-icon-btn {
+  align-items: center;
+  background: transparent;
+  border-color: var(--line);
+  color: var(--muted);
+  display: inline-flex;
+  height: 44px;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+  width: 44px;
+}
+
+.fs-icon-btn[hidden] {
+  display: none;
+}
+
+.fs-icon-btn:hover,
+.fs-icon-btn:focus-visible {
+  color: var(--text, #fff);
+}
+
+.fs-icon-btn .icon-play,
+.fs-icon-btn.is-paused .icon-pause {
+  display: none;
+}
+
+.fs-icon-btn.is-paused .icon-play {
+  display: block;
+}
+
+/* Portrait: the board is width-limited (24 rows, square cells), so the spare
+   height goes above it; the board sits right over the turn buttons. */
+html.is-fullscreen .arena-slot {
+  align-items: flex-end;
+  min-height: 0;
+  overflow: hidden;
+}
+
+html.is-fullscreen .canvas-wrap {
+  box-shadow: 0 0 0 1px var(--line);
+}
+
+html.is-fullscreen .turn-btn {
+  align-self: stretch;
+  height: auto;
+  justify-self: stretch;
+  min-height: 0;
+  width: auto;
+}
+
+/* Sideways (and desktop): score and controls on top of the side columns,
+   the buttons fill the rest of each side, the board takes the middle. */
+@media (orientation: landscape) {
+  html.is-fullscreen .stage {
+    grid-template-areas:
+      "score arena ctl"
+      "left arena right";
+    grid-template-columns: minmax(96px, 1fr) minmax(0, 4fr) minmax(96px, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  html.is-fullscreen .arena-slot {
+    align-items: center;
+  }
+
+  html.is-fullscreen .fs-score {
+    align-items: center;
+    align-self: start;
+    flex-direction: column;
+    gap: 0;
+    justify-self: stretch;
+  }
+
+  html.is-fullscreen .turn-btn {
+    flex-direction: column;
   }
 }

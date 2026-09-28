@@ -26,6 +26,16 @@
   const shellEl = document.querySelector(".shell");
   const turnButtons = document.querySelectorAll(".turn-btn[data-turn]");
   const rootEl = document.documentElement;
+  const fullscreenBtn = document.querySelector("#fullscreen-btn");
+  const fsScoreEl = document.querySelector("#fs-score");
+  const fsPauseBtn = document.querySelector("#fs-pause");
+  const fsExitBtn = document.querySelector("#fs-exit");
+  // Full-screen state (see "Full screen" below): null | "native" | "immersive".
+  let fsMode = null;
+  let fsReturnFocus = null;
+  // Last overlay text as given to setOverlay (re-rendered on full-screen changes).
+  let overlayTitle = null;
+  let overlayMessage = "";
 
   // The board always has 24 rows. Columns are added when the content column is
   // wider than a 24x24 square would be (cells stay square), so the board fills
@@ -209,6 +219,13 @@
   });
   muteBtn.addEventListener("click", toggleMute);
   overlayStartBtn.addEventListener("click", () => {
+    // In full screen the name box is hidden: without a saved name the overlay
+    // button reads "Exit full screen" and takes the player back to it.
+    if (fsMode && !canStart()) {
+      exitFullscreen();
+      ensureCanStart();
+      return;
+    }
     if (!ensureCanStart()) {
       return;
     }
@@ -839,6 +856,21 @@
     const hasModifier = event.ctrlKey || event.metaKey || event.altKey;
     const side = hasModifier ? null : turnFromKey(event.key);
 
+    // F toggles full screen (never while typing: form fields returned above).
+    if (!hasModifier && event.key.toLowerCase() === "f") {
+      event.preventDefault();
+      if (!event.repeat) {
+        toggleFullscreen();
+      }
+      return;
+    }
+    // Native full screen handles Escape itself; the CSS fallback needs this.
+    if (event.key === "Escape" && fsMode) {
+      event.preventDefault();
+      exitFullscreen();
+      return;
+    }
+
     if (side) {
       // Keys never start a run; they only steer while one is live.
       if (!running || gameOver) {
@@ -942,7 +974,8 @@
   function updateStartGateUi() {
     const ok = canStart();
     startBtn.disabled = !ok || saveInFlight;
-    overlayStartBtn.disabled = !ok || saveInFlight;
+    // In full screen without a name the overlay button is "Exit full screen".
+    overlayStartBtn.disabled = (!ok && !fsMode) || saveInFlight;
     saveNameBtn.disabled = saveInFlight || runLocked();
     startBtn.title = ok ? "Start game" : "Save a PG name first";
     overlayStartBtn.title = startBtn.title;
@@ -1985,6 +2018,7 @@
       // The tooltip must never cover the board during play.
       hideDifficultyTip();
     }
+    updateFsControls();
     // Hidden panels change what sits above the arena, so resize right away.
     layoutArena();
   }
@@ -2032,10 +2066,16 @@
     const belowArena = beside ? 0 : stageGap + btnMin;
     const shellStyle = getComputedStyle(shellEl);
     const padBottom = parseFloat(shellStyle.paddingBottom) || 0;
-    const availH = viewportHeight() - slotTop - belowArena - padBottom;
+    // In full screen the arena slot is a grid cell sized by CSS: use all of
+    // it, with no 640px cap.
+    const inFs = Boolean(fsMode);
+    const availH = inFs
+      ? arenaSlot.clientHeight
+      : viewportHeight() - slotTop - belowArena - padBottom;
     const availW = arenaSlot.clientWidth;
     const widthPx = Math.max(Math.floor(minArena * dpr), Math.floor(availW * dpr));
-    const heightCap = Math.max(Math.min(minArena, availW), Math.floor(Math.min(availH, maxArena)));
+    const heightCap = Math.max(Math.min(minArena, availW),
+      Math.floor(inFs ? availH : Math.min(availH, maxArena)));
 
     const allowRegrid = regrid || (!running && !gameOver);
     let tileDevice;
@@ -2101,7 +2141,36 @@
     return map[String(keyName || "").toLowerCase()] || null;
   }
 
+  // The overlay's text is kept as given and re-rendered when full screen
+  // changes: in full screen the setup UI is hidden, so the wording and the
+  // button label point at what can actually be done from there.
   function setOverlay(title, message = "") {
+    overlayTitle = title || null;
+    overlayMessage = message;
+    renderOverlay();
+  }
+
+  function renderOverlay() {
+    const title = overlayTitle;
+    let message = overlayMessage;
+    let label = "Start game";
+    if (fsMode && title) {
+      if (!canStart()) {
+        message = "Exit full screen, save your name, then start.";
+        label = "Exit full screen";
+      } else if (title === "Paused") {
+        message = "Tap Resume or press P.";
+        label = "Resume";
+      } else if (gameOver) {
+        message = message.replace("Pick a difficulty and press Start.", "Play again, or exit full screen to change difficulty.");
+        label = "Play again";
+      } else if (title === "Press Start") {
+        message = "Tap Start game. Steer with Left / Right (or ← / → or A / D keys).";
+      }
+    }
+    if (overlayStartBtn.textContent !== label) {
+      overlayStartBtn.textContent = label;
+    }
     if (!title) {
       overlay.classList.add("hidden");
       return;
@@ -2115,6 +2184,181 @@
       p.classList.remove("new-best");
     }
   }
+
+  // ---- Full screen. Only the current score, the board and the Left / Right
+  // buttons stay visible (plus a small Pause / Exit pair in a corner). Uses the
+  // real Fullscreen API on the stage; where that is missing or refused (iPhone
+  // Safari has no element full screen) a CSS "immersive" mode pins the stage
+  // over the whole viewport instead. fsMode: null | "native" | "immersive".
+  function nativeFsElement() {
+    return document.fullscreenElement || document.webkitFullscreenElement || null;
+  }
+
+  function nativeFsAvailable() {
+    const can = stageEl.requestFullscreen || stageEl.webkitRequestFullscreen;
+    const enabled = document.fullscreenEnabled !== undefined
+      ? document.fullscreenEnabled
+      : Boolean(document.webkitFullscreenEnabled);
+    return Boolean(can && enabled);
+  }
+
+  function applyFullscreenUi() {
+    const on = Boolean(fsMode);
+    rootEl.classList.toggle("is-fullscreen", on);
+    if (on) {
+      rootEl.dataset.fullscreen = fsMode;
+    } else {
+      delete rootEl.dataset.fullscreen;
+    }
+    fullscreenBtn.setAttribute("aria-pressed", String(on));
+    updateFsControls();
+    updateStartGateUi();
+    renderOverlay();
+    if (on) {
+      window.scrollTo(0, 0);
+    }
+    layoutArena();
+    scheduleLayout();
+  }
+
+  function updateFsControls() {
+    const live = runLocked();
+    fsPauseBtn.hidden = !live;
+    const label = paused ? "Resume" : "Pause";
+    fsPauseBtn.setAttribute("aria-label", label);
+    fsPauseBtn.title = `${label} (P)`;
+    fsPauseBtn.classList.toggle("is-paused", paused);
+  }
+
+  function enterImmersive() {
+    fsMode = "immersive";
+    applyFullscreenUi();
+  }
+
+  function enterFullscreen() {
+    if (fsMode || isSettingsOpen()) {
+      return;
+    }
+    hideDifficultyTip();
+    const active = document.activeElement;
+    fsReturnFocus = active && active !== document.body ? active : fullscreenBtn;
+    if (nativeFsAvailable()) {
+      // Lay out for full screen straight away; the browser's resize follows.
+      fsMode = "native";
+      applyFullscreenUi();
+      let request;
+      try {
+        request = stageEl.requestFullscreen
+          ? stageEl.requestFullscreen({ navigationUI: "hide" })
+          : stageEl.webkitRequestFullscreen();
+      } catch (err) {
+        request = Promise.reject(err);
+      }
+      if (request && typeof request.then === "function") {
+        request.catch(() => {
+          // Refused (not allowed, no user gesture, ...): use the CSS mode.
+          if (fsMode === "native" && !nativeFsElement()) {
+            enterImmersive();
+          }
+        });
+      }
+    } else {
+      enterImmersive();
+    }
+    canvas.focus({ preventScroll: true });
+    announce("Full screen. Press Escape to exit.");
+  }
+
+  function exitFullscreen() {
+    if (!fsMode) {
+      return;
+    }
+    if (nativeFsElement()) {
+      try {
+        const done = document.exitFullscreen
+          ? document.exitFullscreen()
+          : document.webkitExitFullscreen && document.webkitExitFullscreen();
+        if (done && typeof done.catch === "function") {
+          done.catch(() => {});
+        }
+      } catch (err) {
+        // Already leaving; the layout is restored below either way.
+      }
+    }
+    leaveFullscreenUi();
+  }
+
+  // Restores the normal page. Called for every way out: the exit button,
+  // Escape, F, or the browser leaving native full screen on its own.
+  function leaveFullscreenUi() {
+    if (!fsMode) {
+      return;
+    }
+    fsMode = null;
+    // Leaving mid-run pauses, so the snake never runs on unseen while the
+    // page re-flows.
+    if (isLivePlay()) {
+      togglePause();
+    }
+    applyFullscreenUi();
+    const target = fsReturnFocus && fsReturnFocus.isConnected && !fsReturnFocus.disabled
+      ? fsReturnFocus
+      : fullscreenBtn;
+    fsReturnFocus = null;
+    target.focus({ preventScroll: true });
+    announce("Left full screen.");
+  }
+
+  function toggleFullscreen() {
+    if (fsMode) {
+      exitFullscreen();
+    } else {
+      enterFullscreen();
+    }
+  }
+
+  function onNativeFsChange() {
+    if (nativeFsElement()) {
+      scheduleLayout();
+      return;
+    }
+    if (fsMode === "native") {
+      leaveFullscreenUi();
+    }
+  }
+
+  function onNativeFsError() {
+    if (fsMode === "native" && !nativeFsElement()) {
+      enterImmersive();
+    }
+  }
+
+  fullscreenBtn.addEventListener("click", toggleFullscreen);
+  fsExitBtn.addEventListener("click", exitFullscreen);
+  fsPauseBtn.addEventListener("click", () => {
+    togglePause();
+    canvas.focus({ preventScroll: true });
+  });
+  document.addEventListener("fullscreenchange", onNativeFsChange);
+  document.addEventListener("webkitfullscreenchange", onNativeFsChange);
+  document.addEventListener("fullscreenerror", onNativeFsError);
+  document.addEventListener("webkitfullscreenerror", onNativeFsError);
+
+  // The full-screen score mirrors #score (which may lag a Relaxed-mode tick).
+  const syncFsScore = () => {
+    if (fsScoreEl.textContent !== scoreEl.textContent) {
+      fsScoreEl.textContent = scoreEl.textContent;
+    }
+  };
+  new MutationObserver(syncFsScore).observe(scoreEl, { childList: true, characterData: true, subtree: true });
+  syncFsScore();
+
+  // Hiding the tab (switching apps, locking the phone) pauses a live run.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden && isLivePlay()) {
+      togglePause();
+    }
+  });
 
   function ensureAudio() {
     if (muted || audioCtx) {
