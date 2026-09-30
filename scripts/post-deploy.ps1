@@ -16,6 +16,16 @@
 
   SnakeArcadeNode, and smoke-tests the local Node port.
 
+  Defaults are production. For the test site pass its values, e.g.
+  -AppRoot C:\WebApps\SnakeArcadeTest -Port 3107 -ServiceName SnakeArcadeTestNode
+  -SiteName SnakeArcadeTest -PublicUrl https://test.snakearcade.socha3.com/
+
+  An existing web.config is never changed (the test site's carries a
+  Let's Encrypt renewal rule); one is only created when missing.
+
+  The GitHub Actions pipeline does not use this script (it uses deploy.ps1);
+  it is for manual repair and first-time setup.
+
 
 
 .EXAMPLE
@@ -28,6 +38,10 @@
 
   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\post-deploy.ps1 -AppRoot C:\WebApps\SnakeArcade
 
+.EXAMPLE
+
+  powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\post-deploy.ps1 -AppRoot C:\WebApps\SnakeArcadeTest -Port 3107 -ServiceName SnakeArcadeTestNode -SiteName SnakeArcadeTest -PublicUrl https://test.snakearcade.socha3.com/
+
 #>
 
 [CmdletBinding()]
@@ -39,6 +53,12 @@ param(
   [int]$Port = 3105,
 
   [string]$ServiceName = "SnakeArcadeNode",
+
+  # IIS site / app pool name (only used in the closing hint).
+  [string]$SiteName = "SnakeArcade",
+
+  # Public URL, printed at the end.
+  [string]$PublicUrl = "https://snakearcade.socha3.com/",
 
   [switch]$SkipNpm
 
@@ -218,10 +238,11 @@ $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 
 if (-not $svc) {
 
-  throw "Service '$ServiceName' not found. Install WinSW service first (C:\Tools\WinSW\SnakeArcadeNode.exe)."
+  throw "Service '$ServiceName' not found. Install the WinSW service first (C:\Tools\WinSW\$ServiceName.exe)."
 
 }
 
+# Restart-Service also starts a stopped service (first deploy).
 Restart-Service -Name $ServiceName -Force
 
 Start-Sleep -Seconds 2
@@ -269,7 +290,7 @@ Write-Host ""
 
 Write-Host "POST-DEPLOY OK" -ForegroundColor Green
 
-Write-Host "Public URL: https://snakearcade.socha3.com/"
+Write-Host "Public URL: $PublicUrl"
 
-Write-Host "If IIS still shows old content, recycle: Restart-WebAppPool SnakeArcade"
+Write-Host "If IIS still shows old content, recycle: Restart-WebAppPool $SiteName"
 

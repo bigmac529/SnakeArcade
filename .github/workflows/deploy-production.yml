@@ -1,0 +1,140 @@
+# Publish a build that already exists (made by "Build and deploy to test") to
+# PRODUCTION, https://snakearcade.socha3.com/. Manual only:
+#   Actions > Deploy to production > Run workflow.
+#
+# "build" input (default latest-test):
+#   latest-test        the build currently on test (most recent successful test deploy)
+#   build-42-1a2b3c4   a release tag from the Releases page
+#   42                 a build number
+#   1a2b3c4 / full sha the newest build of that commit
+# Pick an older build to roll back.
+#
+# Before anything touches the server, the resolve job checks that the zip:
+#   - is a release published by this repo's build workflow (github-actions[bot]),
+#   - matches its recorded SHA-256,
+#   - carries a valid build provenance attestation signed by
+#     .github/workflows/build-and-deploy-test.yml on refs/heads/main for that
+#     exact commit, on a GitHub-hosted runner,
+#   - comes from a commit that is on main,
+#   - has been deployed to test (unless "allow untested" is ticked).
+# The deploy job then runs in the "production" GitHub Environment (add a required
+# reviewer there to get an approval step) and deploys exactly those bytes.
+name: Deploy to production
+
+on:
+  workflow_dispatch:
+    inputs:
+      build:
+        description: 'Build to publish: latest-test (the build on test now), a tag like build-42-1a2b3c4, a build number, or a commit SHA. Pick an older one to roll back.'
+        type: string
+        required: true
+        default: latest-test
+      allow_untested:
+        description: 'Allow a build that never deployed successfully to test'
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    name: Resolve and verify the build
+    # The workflow definition must come from main ("Use workflow from: main").
+    if: github.repository == 'bigmac529/SnakeArcade' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      attestations: read
+    outputs:
+      tag: ${{ steps.pick.outputs.tag }}
+      sha: ${{ steps.pick.outputs.sha }}
+      sha256: ${{ steps.verify.outputs.sha256 }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Checkout the build selector
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
+      - name: Pick the build
+        id: pick
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BUILD_INPUT: ${{ inputs.build }}
+          ALLOW_UNTESTED: ${{ inputs.allow_untested }}
+        run: node .github/scripts/resolve-build.mjs
+
+      - name: Verify the zip
+        id: verify
+        env:
+          TAG: ${{ steps.pick.outputs.tag }}
+          SHA: ${{ steps.pick.outputs.sha }}
+          ZIP: ${{ steps.pick.outputs.zip_name }}
+          REQUESTED: ${{ inputs.build }}
+          TESTED: ${{ steps.pick.outputs.tested }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --pattern "$ZIP" --pattern "$ZIP.sha256" --dir dist
+          recorded=$(cut -d' ' -f1 "dist/$ZIP.sha256")
+          actual=$(sha256sum "dist/$ZIP" | cut -d' ' -f1)
+          if [ "$recorded" != "$actual" ]; then
+            echo "::error::SHA-256 mismatch: release says $recorded, zip is $actual"; exit 1
+          fi
+          # Built by our workflow, from main, for exactly this commit, on a GitHub-hosted runner.
+          gh attestation verify "dist/$ZIP" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/build-and-deploy-test.yml" \
+            --source-ref refs/heads/main --source-digest "$SHA" --deny-self-hosted-runners
+          # The commit must be on main (identical to or behind main's head).
+          status=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$SHA" --jq .status)
+          if [ "$status" != "identical" ] && [ "$status" != "behind" ]; then
+            echo "::error::Commit $SHA is not on main (compare status: $status)"; exit 1
+          fi
+          echo "sha256=$actual" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Publishing \`$TAG\` to production"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Requested | \`$REQUESTED\` |"
+            echo "| Commit | $SHA |"
+            echo "| Deployed to test | $TESTED |"
+            echo "| Zip SHA-256 | \`$actual\` (attestation verified) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    needs: resolve
+    uses: ./.github/workflows/deploy-build.yml
+    with:
+      environment: production
+      tag: ${{ needs.resolve.outputs.tag }}
+      sha256: ${{ needs.resolve.outputs.sha256 }}
+    permissions:
+      contents: read
+
+  record:
+    needs: [resolve, deploy]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write      # append to the release notes
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.resolve.outputs.tag }}
+    steps:
+      - name: Record the production deploy on the release
+        run: |
+          set -euo pipefail
+          run="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          gh release view "$TAG" --json body --jq .body > notes.md
+          printf -- '- %s: deployed to **production** by @%s (%s)\n' "$(date -u '+%Y-%m-%d %H:%M UTC')" "$GITHUB_ACTOR" "$run" >> notes.md
+          gh release edit "$TAG" --notes-file notes.md
+          echo "### $TAG is on production" >> "$GITHUB_STEP_SUMMARY"

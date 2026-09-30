@@ -8,6 +8,17 @@ const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 const LOCK_FILE = path.join(DATA_DIR, "settings.json.lock");
 const PORT = Number(process.env.PORT) || 3023;
 
+// Which release build is running (build-info.json is written into every build
+// zip by the release pipeline; absent in a plain checkout).
+const BUILD = (() => {
+  try {
+    const info = JSON.parse(fs.readFileSync(path.join(ROOT, "build-info.json"), "utf8"));
+    return info && info.tag ? { tag: String(info.tag), sha: String(info.sha || ""), builtAt: String(info.builtAt || "") } : null;
+  } catch {
+    return null;
+  }
+})();
+
 const LOCK_MAX_ATTEMPTS = 12;
 const LOCK_BASE_MS = 25;
 const LOCK_MAX_MS = 180;
@@ -292,6 +303,7 @@ app.get("/api/health", (_req, res) => {
     app: "SnakeArcade",
     node: process.version,
     port: PORT,
+    ...(BUILD ? { build: BUILD } : {}),
     time: new Date().toISOString()
   });
 });
