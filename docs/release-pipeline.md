@@ -226,7 +226,7 @@ Merging #11 deploys the accounts version to **test only** (production keeps runn
    <env name="SNAKEARCADE_ENV_FILE" value="C:\WebApps\SnakeArcadeTest-config\snakearcade.env" />
    ```
 
-   Then reload the definition: `C:\Tools\WinSW\SnakeArcadeTestNode.exe refresh`. Do not restart the service afterwards by hand: the running build (no accounts) ignores the file, and the next deploy restarts it.
+   No reload command is needed: WinSW (2.12.0, which has no `refresh` command) re-reads the XML every time the service starts, so the edit takes effect at the next service start: the deploy's restart (or `Restart-Service SnakeArcadeTestNode` if you need it now). Here there's no need to restart by hand: the running build (no accounts) ignores the file, and the next deploy restarts it.
 
 5. **Migrations: nothing to run by hand.** The test deploy runs them before stopping the service, with `DB_MIGRATION_CONNECTION_STRING`, after checking that both connections really point at `SnakeArcadeTest`. Optional check before merging, from any extracted accounts build (or a clone of the PR branch with `npm ci --omit=dev`):
 

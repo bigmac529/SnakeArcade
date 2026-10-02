@@ -127,7 +127,7 @@ icacls C:\WebApps\SnakeArcade-config /inheritance:r /grant:r "Administrators:(OI
 <env name="SNAKEARCADE_ENV_FILE" value="C:\WebApps\SnakeArcade-config\snakearcade.env" />
 ```
 
-Then reload the service definition (`SnakeArcadeNode.exe refresh`, or stop / `uninstall` / `install` / start) and restart it. (Alternatively each setting can be its own `<env name="…" value="…"/>` line in the WinSW XML; real environment variables win over the file. The file is easier to keep out of logs and backups of the XML.)
+No reload command is needed: WinSW (2.12.0 on the server, which has no `refresh` command) re-reads the XML every time the service starts, so the edit takes effect at the next service start: the deploy's restart, or `Restart-Service SnakeArcadeNode` if you need it now. (Alternatively each setting can be its own `<env name="…" value="…"/>` line in the WinSW XML; real environment variables win over the file. The file is easier to keep out of logs and backups of the XML.)
 
 **Only after the file exists**: the app refuses to start if `SNAKEARCADE_ENV_FILE` names a missing file.
 
@@ -218,7 +218,7 @@ Players with a best of 0 and names that fail the PG filter are skipped. Whether 
 - [ ] Logins: `snakearcade_app` (db_datareader + db_datawriter) and `snakearcade_migrator` (db_ddladmin + db_datareader + db_datawriter), or one login with all three (option B). Long random passwords.
 - [ ] Folder `C:\WebApps\SnakeArcade-config\` created outside the web root, ACL: Administrators, SYSTEM, service account, runner account (`svc-snakearcade`, Read) only.
 - [ ] `snakearcade.env` written there: `NODE_ENV=production`, `PORT=3105`, `HOST=localhost`, `PUBLIC_BASE_URL=https://snakearcade.socha3.com`, `SESSION_SECRET` (generated, 32+ chars), `DB_CLIENT=mssql`, `DB_CONNECTION_STRING`, `DB_MIGRATION_CONNECTION_STRING` + `DB_MIGRATE_ON_START=false` (option A), `SMTP_*`, `MAIL_FROM`.
-- [ ] WinSW `SnakeArcadeNode.xml` (after the file exists): `<env name="SNAKEARCADE_ENV_FILE" value="C:\WebApps\SnakeArcade-config\snakearcade.env" />` added, service definition refreshed.
+- [ ] WinSW `SnakeArcadeNode.xml` (after the file exists): `<env name="SNAKEARCADE_ENV_FILE" value="C:\WebApps\SnakeArcade-config\snakearcade.env" />` added (takes effect at the next service start: the deploy's restart, or `Restart-Service SnakeArcadeNode`).
 - [ ] Mailbox `no-reply@socha3.com` created (or the existing mailbox chosen), SMTP AUTH enabled for it, app password if needed. SMTP host / port (587 STARTTLS or 465 TLS) noted in the env file. Outbound 587/465 allowed from the server.
 - [ ] socha3.com DNS: SPF includes the mail provider (single SPF record), DKIM enabled and published, DMARC `p=none` to start.
 - [ ] Nothing to run by hand for migrations: the production deploy applies them with the migrator line (section 4).
