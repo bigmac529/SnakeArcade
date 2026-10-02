@@ -188,10 +188,10 @@ All `/api` responses are JSON with `Cache-Control: no-store`. Errors are `{ ok: 
 - `POST /api/auth/reset` `{ token, password }` → me payload (new session); other sessions are revoked
 - `POST /api/account/name` `{ displayName }` (session) → me payload + board. `409` `name_taken`
 - `GET /api/players` → `{ revision, players: [{ playerName, best, bestDifficulty?, updatedAt, isYou?, legacy? }] }`
-- `POST /api/score` `{ score, difficulty, epoch?, runAccount? }` (confirmed account) → `{ ok, improved, stale, score, player, revision, players }`
+- `POST /api/score` `{ score, difficulty, epoch, runAccount? }` (confirmed account) → `{ ok, improved, stale, score, player, revision, players }`
   - The player comes from the session; a name in the body is ignored. `401` signed out, `403` `csrf_failed` / `email_unverified`.
   - The server keeps the higher of `score` and the stored best (and tags it with `difficulty` when higher), so saves can overlap, repeat or arrive out of order.
-  - `epoch`: the account's `scoreEpoch` when the run started; a score from before a reset is ignored (`stale: true`).
+  - `epoch` (required, integer >= 0, else `400` `epoch_invalid`): the account's `scoreEpoch` when the run started; a score from before a reset is ignored (`stale: true`). The check and the write are one conditional `UPDATE`, so a save racing a reset can't bring the old best back.
   - `runAccount`: the account id the run started under; a different session account gets `409` `account_changed`.
 - `POST /api/reset-best` (confirmed account) → `{ ok, found, previousBest, player, revision, players }`. Sets your best to 0 and bumps `scoreEpoch`.
 - The old `GET/PUT /api/settings` name-only API is gone (404).
@@ -202,16 +202,17 @@ All settings are environment variables (or lines in an env file: `.env` in the a
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `NODE_ENV` | | `production` on the server: requires `SESSION_SECRET`, secure cookies |
+| `NODE_ENV` | | `production` on the server: requires `SESSION_SECRET`, `DB_CLIENT` and mail (below), secure cookies; the app refuses to start without them |
 | `PORT`, `HOST` | `3023`, `localhost` | production service uses `3105` |
 | `PUBLIC_BASE_URL` | `http://localhost:PORT` | used in email links and the Origin check: `https://snakearcade.socha3.com` |
 | `SESSION_SECRET` | | 32+ random characters, secret |
-| `DB_CLIENT` | `sqlite` | `mssql` in production |
+| `DB_CLIENT` | `sqlite` (dev/tests only) | `mssql` in production; with `NODE_ENV=production` it must be set (no silent SQLite fallback) |
 | `SQLITE_FILE` | `data/snakearcade.db` | local only |
 | `DB_CONNECTION_STRING` | | SQL Server app login (read/write), secret |
 | `DB_MIGRATION_CONNECTION_STRING` | | optional login with DDL rights for migrations, secret |
 | `DB_MIGRATE_ON_START` | `true` | `false` if the app login can't create tables |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE` | empty, `587`, port 465 → true | empty host = write emails to `data/outbox/` |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE` | empty, `587`, port 465 → true | |
+| `MAIL_TRANSPORT` | `smtp` if `SMTP_HOST` is set, else `outbox` | `outbox` = write emails as files to `data/outbox/` instead of sending. In production `SMTP_HOST` is required unless `MAIL_TRANSPORT=outbox` is set explicitly (for a test site without mail) |
 | `SMTP_USER`, `SMTP_PASSWORD` | | mailbox login, password is secret |
 | `MAIL_FROM`, `MAIL_REPLY_TO` | `SnakeArcade <no-reply@socha3.com>` | |
 | `RATE_LIMIT_*`, `VERIFY_TOKEN_HOURS`, `RESET_TOKEN_MINUTES` | see `.env.example` | |

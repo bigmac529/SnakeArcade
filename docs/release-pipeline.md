@@ -209,7 +209,8 @@ Merging #11 deploys the accounts version to **test only** (production keeps runn
 
    - `<SQLHOST>`: `localhost` if SQL Server is on this machine; named instance: `Server=localhost\INSTANCE` (no `,1433`). Use `TrustServerCertificate=true` only for SQL Server's self-signed certificate on the same machine / trusted network.
    - A password containing `;` goes in braces: `Password={pa;ss}`.
-   - No real mail on test? Leave `SMTP_HOST=` empty: emails are then written to `C:\WebApps\SnakeArcadeTest\data\outbox\` instead of being sent (sign-up confirmation links can be copied from there).
+   - No real mail on test? Leave out the `SMTP_*` lines **and add `MAIL_TRANSPORT=outbox`**: emails are then written to `C:\WebApps\SnakeArcadeTest\data\outbox\` instead of being sent (sign-up confirmation links can be copied from there). Without `MAIL_TRANSPORT=outbox`, an empty `SMTP_HOST` makes the site refuse to start (`NODE_ENV=production` requires real mail unless the outbox is chosen explicitly).
+   - `DB_CLIENT=mssql` must stay: in production the site refuses to start without `DB_CLIENT` (there is no fallback to a local SQLite file).
 
 3. **Folder access.** The runner reads the file during each deploy (migrations, port check); LocalSystem (the service) can already read it:
 

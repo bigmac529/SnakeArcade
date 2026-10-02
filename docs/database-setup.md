@@ -158,7 +158,7 @@ So the emails reach inboxes and not spam, the socha3.com DNS (Cloudflare) needs:
 
 **Check:** after setup, sign up on the site with a real address (Gmail works well) and use "Show original": `SPF: PASS`, `DKIM: PASS`, `DMARC: PASS`. Don't forget spam folders during the first test.
 
-`/api/health` shows `"mail":"smtp"` once `SMTP_HOST` is set (`"outbox"` means emails are only written to `data\outbox\` and nobody receives them; the log warns about this in production). Failed sends are logged with a masked address (`n***@example.com`) and the reason; players can use **Resend email** after a minute.
+`/api/health` shows `"mail":"smtp"` once `SMTP_HOST` is set. With `NODE_ENV=production` the site **refuses to start** without `SMTP_HOST` (and without `DB_CLIENT`), so a typo can't silently turn off email. A site that really should not send mail (a test site) sets `MAIL_TRANSPORT=outbox` explicitly: emails are then only written to `data\outbox\`, nobody receives them, `/api/health` shows `"mail":"outbox"` and the log warns. Failed sends are logged with a masked address (`n***@example.com`) and the reason; players can use **Resend email** after a minute.
 
 ## 4. Migrations (creating the tables)
 
