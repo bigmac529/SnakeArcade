@@ -34,7 +34,8 @@ async function checkDatabase(db, expected, label) {
 
 (async () => {
   const config = loadConfig();
-  const fatal = config.problems.filter((p) => !p.startsWith("SESSION_SECRET"));
+  // Only the database settings matter here (no sessions, no email).
+  const fatal = config.problems.filter((p) => p.startsWith("DB_"));
   if (fatal.length) {
     fatal.forEach((p) => console.error(p));
     process.exit(1);

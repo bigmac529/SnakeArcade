@@ -32,14 +32,24 @@ async function verifyPassword(password, stored) {
   return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
 }
 
-// Used when the email is unknown, so a failed sign-in takes the same time
-// whether or not the account exists.
-let dummyHash = null;
-async function burnPasswordCheck(password) {
-  if (!dummyHash) {
-    dummyHash = await hashPassword("not-a-real-password-" + crypto.randomBytes(8).toString("hex"));
+// Used when the email is unknown, so a failed sign-in does the same work (one
+// scrypt) whether or not the account exists. The dummy hash is computed once,
+// in the background as soon as this module loads, and shared by every request
+// (one promise), so even the first unknown-email logins don't pay for a
+// second scrypt or each build their own.
+let dummyHashPromise = null;
+function dummyHash() {
+  if (!dummyHashPromise) {
+    dummyHashPromise = hashPassword("not-a-real-password-" + crypto.randomBytes(8).toString("hex"));
   }
-  await verifyPassword(password, dummyHash);
+  return dummyHashPromise;
+}
+dummyHash().catch(() => {
+  dummyHashPromise = null; // retried on first use
+});
+
+async function burnPasswordCheck(password) {
+  await verifyPassword(password, await dummyHash());
   return false;
 }
 

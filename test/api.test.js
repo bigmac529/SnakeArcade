@@ -24,7 +24,22 @@ let config;
 const logs = [];
 const quietLog = { log: (...a) => logs.push(a.join(" ")), error: (...a) => logs.push(a.join(" ")), warn: (...a) => logs.push(a.join(" ")) };
 
-async function setup(limits = {}) {
+// Wraps a database so every statement first yields for a few ms, like a
+// network round-trip to SQL Server: concurrent requests then really
+// interleave between a check and the write that follows it. A transaction
+// still runs as one unit (the SQLite adapter queues it whole).
+function slowDb(d, ms = 4) {
+  const pause = () => new Promise((r) => setTimeout(r, ms));
+  const wrap = (q) => ({
+    ...q,
+    get: async (...a) => (await pause(), q.get(...a)),
+    all: async (...a) => (await pause(), q.all(...a)),
+    run: async (...a) => (await pause(), q.run(...a))
+  });
+  return { ...wrap(d), dialect: d.dialect, transaction: (fn) => d.transaction((tx) => fn(wrap(tx))) };
+}
+
+async function setup(limits = {}, { slow = false } = {}) {
   const env = {
     NODE_ENV: "test",
     PORT: "0",
@@ -45,9 +60,10 @@ async function setup(limits = {}) {
   assert.deepEqual(config.problems, []);
   db = await openDatabase(config.db);
   await migrate(db);
-  const store = createStore(db);
+  const appDb = slow ? slowDb(db) : db;
+  const store = createStore(appDb);
   const mailer = createMailer(config.mail, { log: quietLog.log });
-  const app = createApp({ config, store, mailer, db, log: quietLog });
+  const app = createApp({ config, store, mailer, db: appDb, log: quietLog });
   server.on("request", app);
   return { store };
 }
@@ -406,23 +422,87 @@ test("scores: keep the higher, per account, body identity ignored", async () => 
   assert.equal(r2.body.player.best, 120);
   assert.equal(r2.body.player.bestDifficulty, "hard");
   // Spoofing another player in the body changes nothing for them.
-  const spoof = await a.c.post("/api/score", { score: 999, playerName: b.displayName, userId: b.res.body.user.id, user: { id: b.res.body.user.id } });
+  const spoof = await a.c.post("/api/score", { score: 999, epoch: 0, playerName: b.displayName, userId: b.res.body.user.id, user: { id: b.res.body.user.id } });
   assert.equal(spoof.status, 200);
   assert.equal(spoof.body.player.playerName, a.displayName);
   assert.equal(spoof.body.player.best, 999);
   assert.equal((await b.c.get("/api/auth/me")).body.user.best, 0);
   // A run that started under another account is refused, never re-credited.
-  const switched = await b.c.post("/api/score", { score: 555, runAccount: a.res.body.user.id });
+  const switched = await b.c.post("/api/score", { score: 555, epoch: 0, runAccount: a.res.body.user.id });
   assert.equal(switched.status, 409);
   assert.equal(switched.body.error, "account_changed");
-  assert.equal((await b.c.post("/api/score", { score: 5, runAccount: b.res.body.user.id })).body.player.best, 5);
+  assert.equal((await b.c.post("/api/score", { score: 5, epoch: 0, runAccount: b.res.body.user.id })).body.player.best, 5);
   await b.c.post("/api/reset-best", {});
   const board = (await client().get("/api/players")).body.players;
   assert.ok(board.some((p) => p.playerName === a.displayName && p.best === 999));
   assert.ok(!board.some((p) => p.playerName === b.displayName));
-  assert.equal((await a.c.post("/api/score", { score: -1 })).status, 400);
-  assert.equal((await a.c.post("/api/score", { score: 1.5 })).status, 400);
-  assert.equal((await a.c.post("/api/score", { score: "abc" })).status, 400);
+  assert.equal((await a.c.post("/api/score", { score: -1, epoch: 0 })).status, 400);
+  assert.equal((await a.c.post("/api/score", { score: 1.5, epoch: 0 })).status, 400);
+  assert.equal((await a.c.post("/api/score", { score: "abc", epoch: 0 })).status, 400);
+  // The run's epoch is required and must be the current one.
+  for (const epoch of [undefined, null, "", "x", -1, 0.5]) {
+    const r = await a.c.post("/api/score", { score: 5000, ...(epoch === undefined ? {} : { epoch }) });
+    assert.equal(r.status, 400, `epoch ${JSON.stringify(epoch)}`);
+    assert.equal(r.body.error, "epoch_invalid");
+  }
+  const future = await a.c.post("/api/score", { score: 5000, epoch: 7 });
+  assert.equal(future.status, 200);
+  assert.equal(future.body.stale, true, "an epoch the account never had is stale");
+  assert.equal(future.body.player.best, 999);
+});
+
+test("scores: a reset that lands mid-save can't be undone by the old save (atomic UPDATE)", async () => {
+  // Simulates SQL Server READ COMMITTED: another session's Reset best score
+  // commits between whatever the save reads and its UPDATE. Injected right
+  // before the save's first write, inside its transaction.
+  const { createStore } = require("../src/store");
+  const a = await verifiedUser();
+  const userId = a.res.body.user.id;
+  assert.equal((await a.c.post("/api/score", { score: 300, epoch: 0 })).body.player.best, 300);
+  let injected = false;
+  const racyDb = {
+    ...db,
+    dialect: db.dialect,
+    transaction: (fn) =>
+      db.transaction((tx) =>
+        fn({
+          ...tx,
+          run: async (sql, params) => {
+            if (!injected && /UPDATE player_scores SET best = @score/.test(sql)) {
+              injected = true;
+              await tx.run("UPDATE player_scores SET best = 0, best_difficulty = NULL, score_epoch = score_epoch + 1 WHERE user_id = @u", { u: userId });
+            }
+            return tx.run(sql, params);
+          }
+        })
+      )
+  };
+  const result = await createStore(racyDb).submitScore(userId, 250, "hard", 0);
+  assert.ok(injected, "the reset was injected");
+  assert.equal(result.improved, false);
+  assert.equal(result.stale, true);
+  const me = (await a.c.get("/api/auth/me")).body.user;
+  assert.equal(me.best, 0, "the pre-reset save must not restore a score");
+  assert.equal(me.scoreEpoch, 1);
+});
+
+test("scores: parallel saves and a reset: no lower or pre-reset score survives", async () => {
+  const a = await verifiedUser();
+  const saves = [];
+  for (let i = 1; i <= 20; i += 1) {
+    saves.push(a.c.post("/api/score", { score: i * 10, epoch: 0 }));
+    if (i === 10) {
+      saves.push(a.c.post("/api/reset-best", {}));
+    }
+  }
+  await Promise.all(saves);
+  const me = (await a.c.get("/api/auth/me")).body.user;
+  assert.equal(me.scoreEpoch, 1);
+  // Every epoch-0 save either landed before the reset (then wiped) or after it (stale): best is 0.
+  assert.equal(me.best, 0);
+  const after = await Promise.all([30, 90, 60].map((score) => a.c.post("/api/score", { score, epoch: 1 })));
+  assert.ok(after.every((r) => r.status === 200));
+  assert.equal((await a.c.get("/api/auth/me")).body.user.best, 90, "the higher of parallel saves wins");
 });
 
 test("reset best: only the signed-in account, old-epoch saves are ignored", async () => {
@@ -565,6 +645,46 @@ test("logs never contain full email addresses", async () => {
   }
 });
 
+async function restart(limits, opts) {
+  await new Promise((r) => server.close(r));
+  await db.close();
+  await setup({ RATE_LIMIT_LOGIN_IP_PER_15MIN: "1000", RATE_LIMIT_SIGNUP_PER_HOUR: "1000", RATE_LIMIT_FORGOT_IP_PER_HOUR: "1000", ...limits }, opts);
+}
+
+test("resend verification: parallel requests can't beat the cooldown", async () => {
+  await restart({}, { slow: true });
+  const c = client();
+  const s = await signup(c);
+  await db.run("UPDATE email_tokens SET created_at = created_at - @d WHERE user_id = @u", { d: 120000, u: s.res.body.user.id });
+  const rs = await Promise.all(Array.from({ length: 12 }, () => c.post("/api/auth/resend-verification", {})));
+  assert.equal(rs.filter((r) => r.status === 200).length, 1, rs.map((r) => r.status).join(","));
+  assert.ok(rs.filter((r) => r.status === 429).every((r) => Number(r.headers.get("retry-after")) >= 1));
+  assert.equal(mails(s.email, "verify").length, 2, "sign-up email + exactly one resend");
+});
+
+test("resend verification and forgot password: parallel requests can't beat the caps", async () => {
+  await restart({ RATE_LIMIT_RESEND_COOLDOWN_SECONDS: "0", RATE_LIMIT_RESEND_PER_DAY: "3", RATE_LIMIT_FORGOT_PER_HOUR: "2" }, { slow: true });
+  const c = client();
+  const s = await signup(c);
+  const rs = await Promise.all(Array.from({ length: 15 }, () => c.post("/api/auth/resend-verification", {})));
+  // The sign-up email counts toward the 3 per day.
+  assert.equal(rs.filter((r) => r.status === 200).length, 2, rs.map((r) => r.status).join(","));
+  assert.equal(mails(s.email, "verify").length, 3);
+  const n = Number((await db.get("SELECT COUNT(*) AS n FROM email_tokens WHERE user_id = @u AND purpose = @p", { u: s.res.body.user.id, p: "verify" })).n);
+  assert.equal(n, 3, "no extra tokens were created either");
+
+  const a = await verifiedUser();
+  const fs2 = await Promise.all(Array.from({ length: 15 }, () => client().post("/api/auth/forgot", { email: a.email })));
+  assert.ok(fs2.every((r) => r.status === 200), "always the same answer");
+  for (let i = 0; i < 40 && mails(a.email, "reset").length < 2; i += 1) {
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(mails(a.email, "reset").length, 2);
+  const m = Number((await db.get("SELECT COUNT(*) AS n FROM email_tokens WHERE user_id = @u AND purpose = @p", { u: a.res.body.user.id, p: "reset" })).n);
+  assert.equal(m, 2);
+});
+
 test("signup rate limit per IP", async () => {
   await new Promise((r) => server.close(r));
   await db.close();
@@ -582,15 +702,36 @@ test("env file parsing: comments, quotes, inline comments", () => {
   assert.deepEqual(parsed, { PORT: "3105", A: "abc #123", B: "p#ss", C: "q" });
 });
 
-test("production config: session secret required, SMTP optional but warned", () => {
+test("production config: session secret, DB_CLIENT and SMTP required (outbox only by explicit opt-in)", () => {
   const { loadConfig } = require("../src/config");
   const bad = loadConfig({ NODE_ENV: "production" }, { loadFile: false });
   assert.ok(bad.problems.some((p) => p.startsWith("SESSION_SECRET")));
-  const ok = loadConfig({ NODE_ENV: "production", SESSION_SECRET: "x".repeat(40), PUBLIC_BASE_URL: "https://snakearcade.socha3.com" }, { loadFile: false });
-  assert.deepEqual(ok.problems, []);
-  assert.equal(ok.cookieSecure, true);
-  assert.ok(ok.warnings.some((w) => w.includes("SMTP_HOST")));
-  const smtp = loadConfig({ SMTP_HOST: "mail.example.com", SMTP_PORT: "465" }, { loadFile: false });
+  assert.ok(bad.problems.some((p) => p.startsWith("DB_CLIENT is required")), "no silent SQLite in production");
+  assert.ok(bad.problems.some((p) => p.startsWith("SMTP_HOST is required")), "no silent outbox in production");
+  const base = {
+    NODE_ENV: "production",
+    SESSION_SECRET: "x".repeat(40),
+    PUBLIC_BASE_URL: "https://snakearcade.socha3.com",
+    DB_CLIENT: "mssql",
+    DB_CONNECTION_STRING: "Server=x;Database=SnakeArcade;User Id=a;Password=b"
+  };
+  const smtp = loadConfig({ ...base, SMTP_HOST: "mail.example.com", SMTP_PORT: "465" }, { loadFile: false });
+  assert.deepEqual(smtp.problems, []);
+  assert.equal(smtp.cookieSecure, true);
   assert.equal(smtp.mail.secure, true);
   assert.equal(smtp.mail.mode, "smtp");
+  const outbox = loadConfig({ ...base, MAIL_TRANSPORT: "outbox" }, { loadFile: false });
+  assert.deepEqual(outbox.problems, []);
+  assert.equal(outbox.mail.mode, "outbox");
+  assert.ok(outbox.warnings.some((w) => w.includes("MAIL_TRANSPORT=outbox")));
+  assert.ok(loadConfig({ ...base, MAIL_TRANSPORT: "carrier-pigeon" }, { loadFile: false }).problems.some((p) => p.startsWith("MAIL_TRANSPORT must be")));
+  assert.ok(loadConfig({ ...base, MAIL_TRANSPORT: "smtp" }, { loadFile: false }).problems.some((p) => p.startsWith("MAIL_TRANSPORT=smtp needs SMTP_HOST")));
+  const sqliteProd = loadConfig({ ...base, DB_CLIENT: "sqlite", SMTP_HOST: "mail.example.com" }, { loadFile: false });
+  assert.deepEqual(sqliteProd.problems, [], "SQLite in production only when chosen explicitly");
+  assert.ok(sqliteProd.warnings.some((w) => w.startsWith("DB_CLIENT=sqlite")));
+  // Local dev / tests: SQLite + outbox by default, no problems.
+  const dev = loadConfig({}, { loadFile: false });
+  assert.deepEqual(dev.problems, []);
+  assert.equal(dev.db.client, "sqlite");
+  assert.equal(dev.mail.mode, "outbox");
 });

@@ -185,12 +185,18 @@ function createApp({ config, store, mailer, db, log = console }) {
     return sessionId;
   }
 
+  async function mailVerification(user, token) {
+    const link = `${config.publicBaseUrl}/?verify=${token}`;
+    await mailer.send({ to: user.email, ...verificationEmail({ displayName: user.displayName, link, hours: config.tokens.verifyHours }) });
+  }
+
+  // First verification email right after sign-up (not rate limited: the
+  // account was just created).
   async function sendVerification(user) {
     const token = newToken();
     const now = Date.now();
     await store.createEmailToken({ tokenHash: hashToken(token), userId: user.id, purpose: "verify", now, expiresAt: now + config.tokens.verifyHours * HOUR });
-    const link = `${config.publicBaseUrl}/?verify=${token}`;
-    await mailer.send({ to: user.email, ...verificationEmail({ displayName: user.displayName, link, hours: config.tokens.verifyHours }) });
+    await mailVerification(user, token);
   }
 
   function rateLimited(res, result, message) {
@@ -311,17 +317,28 @@ function createApp({ config, store, mailer, db, log = console }) {
       if (user.verified) {
         return send(res, 200, { ok: true, alreadyVerified: true });
       }
+      // Check the cooldown and daily cap and create the token in one atomic
+      // step, so parallel requests can't each pass the check.
       const now = Date.now();
-      const day = await store.emailTokenStats(user.id, "verify", now - 24 * HOUR);
-      const cooldownMs = config.limits.resendCooldownSeconds * 1000;
-      if (day.lastAt && now - day.lastAt < cooldownMs) {
-        return rateLimited(res, { retryAfterSeconds: Math.ceil((cooldownMs - (now - day.lastAt)) / 1000) }, "Email just sent. Wait a minute before asking again.");
-      }
-      if (day.count >= config.limits.resendPerDay) {
-        return rateLimited(res, { retryAfterSeconds: 3600 }, "That's enough emails for today. Check your spam folder, or try again tomorrow.");
+      const token = newToken();
+      const reserved = await store.reserveEmailToken({
+        tokenHash: hashToken(token),
+        userId: user.id,
+        purpose: "verify",
+        now,
+        expiresAt: now + config.tokens.verifyHours * HOUR,
+        windowMs: 24 * HOUR,
+        max: config.limits.resendPerDay,
+        cooldownMs: config.limits.resendCooldownSeconds * 1000
+      });
+      if (!reserved.ok) {
+        const retryAfterSeconds = Math.max(1, Math.ceil(reserved.retryAfterMs / 1000));
+        return reserved.reason === "cooldown"
+          ? rateLimited(res, { retryAfterSeconds }, "Email just sent. Wait a minute before asking again.")
+          : rateLimited(res, { retryAfterSeconds }, "That's enough emails for today. Check your spam folder, or try again tomorrow.");
       }
       try {
-        await sendVerification(user);
+        await mailVerification(user, token);
       } catch (err) {
         log.error(`[mail] verification email to ${V.maskEmail(user.email)} failed:`, scrubEmails(err && err.message));
         return fail(res, 502, "mail_failed", "Couldn't send the email right now. Try again in a few minutes.");
@@ -390,13 +407,21 @@ function createApp({ config, store, mailer, db, log = console }) {
         if (!user) {
           return;
         }
+        // Per-account hourly cap, checked and reserved atomically.
         const now = Date.now();
-        const recent = await store.emailTokenStats(user.id, "reset", now - HOUR);
-        if (recent.count >= config.limits.forgotPerHourPerAccount) {
+        const token = newToken();
+        const reserved = await store.reserveEmailToken({
+          tokenHash: hashToken(token),
+          userId: user.id,
+          purpose: "reset",
+          now,
+          expiresAt: now + config.tokens.resetMinutes * 60 * 1000,
+          windowMs: HOUR,
+          max: config.limits.forgotPerHourPerAccount
+        });
+        if (!reserved.ok) {
           return;
         }
-        const token = newToken();
-        await store.createEmailToken({ tokenHash: hashToken(token), userId: user.id, purpose: "reset", now, expiresAt: now + config.tokens.resetMinutes * 60 * 1000 });
         await mailer.send({
           to: user.email,
           ...resetEmail({ displayName: user.displayName, link: `${config.publicBaseUrl}/?reset=${token}`, minutes: config.tokens.resetMinutes })
@@ -488,7 +513,13 @@ function createApp({ config, store, mailer, db, log = console }) {
         return fail(res, 400, "score_invalid", "Score must be a whole number.");
       }
       const difficulty = V.normalizeDifficulty(body.difficulty);
-      const epoch = body.epoch != null && body.epoch !== "" ? Number(body.epoch) : null;
+      // The account's score epoch when the run started (GET /api/auth/me,
+      // scoreEpoch). Required: a save for an older epoch (from before a Reset
+      // best score) or an unknown one must never change the best.
+      const epoch = typeof body.epoch === "number" || (typeof body.epoch === "string" && body.epoch.trim() !== "") ? Number(body.epoch) : NaN;
+      if (!Number.isInteger(epoch) || epoch < 0) {
+        return fail(res, 400, "epoch_invalid", "Score save is missing the run's epoch. Reload the page and try again.");
+      }
       const userId = req.auth.user.id;
       // Guard, not identity: the page says which account its run started
       // under; if this browser has since switched accounts, refuse rather

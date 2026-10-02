@@ -50,6 +50,14 @@ function createStore(db) {
     return row ? Number(row.int_value) : 0;
   }
 
+  async function tokenStats(userId, purpose, since, q = db) {
+    const row = await q.get(
+      "SELECT COUNT(*) AS n, MAX(created_at) AS last_at FROM email_tokens WHERE user_id = @userId AND purpose = @purpose AND created_at > @since",
+      { userId, purpose, since }
+    );
+    return { count: Number((row && row.n) || 0), lastAt: row && row.last_at != null ? Number(row.last_at) : null };
+  }
+
   async function findUserBy(column, value, q = db) {
     const row = await q.get(
       `SELECT ${USER_COLUMNS} FROM users u LEFT JOIN player_scores s ON s.user_id = u.id WHERE u.${column} = @value`,
@@ -210,36 +218,69 @@ function createStore(db) {
       });
     },
 
-    async emailTokenStats(userId, purpose, since) {
-      const row = await db.get(
-        "SELECT COUNT(*) AS n, MAX(created_at) AS last_at FROM email_tokens WHERE user_id = @userId AND purpose = @purpose AND created_at > @since",
-        { userId, purpose, since }
-      );
-      return { count: Number((row && row.n) || 0), lastAt: row && row.last_at != null ? Number(row.last_at) : null };
+    emailTokenStats: (userId, purpose, since) => tokenStats(userId, purpose, since),
+
+    // Rate-limited token creation (resend verification, forgot password).
+    // The cooldown / cap check and the INSERT run in ONE transaction that
+    // first locks the account's users row, so parallel requests for the same
+    // account are serialized and can't all pass the check:
+    //   SQLite: BEGIN IMMEDIATE (one writer) + the adapter's single queue;
+    //   SQL Server: UPDLOCK, HOLDLOCK on the row, held until commit.
+    // Returns { ok: true } or { ok: false, reason: "cooldown" | "cap" |
+    // "missing", retryAfterMs }.
+    async reserveEmailToken({ tokenHash, userId, purpose, now = Date.now(), expiresAt, windowMs, max, cooldownMs = 0 }) {
+      const lockHint = db.dialect === "mssql" ? " WITH (UPDLOCK, HOLDLOCK)" : "";
+      return db.transaction(async (tx) => {
+        const owner = await tx.get(`SELECT id FROM users${lockHint} WHERE id = @userId`, { userId });
+        if (!owner) {
+          return { ok: false, reason: "missing", retryAfterMs: 0 };
+        }
+        const since = now - windowMs;
+        const stats = await tokenStats(userId, purpose, since, tx);
+        if (cooldownMs > 0 && stats.lastAt !== null && now - stats.lastAt < cooldownMs) {
+          return { ok: false, reason: "cooldown", retryAfterMs: cooldownMs - (now - stats.lastAt) };
+        }
+        if (stats.count >= max) {
+          const oldest = await tx.get(
+            "SELECT MIN(created_at) AS first_at FROM email_tokens WHERE user_id = @userId AND purpose = @purpose AND created_at > @since",
+            { userId, purpose, since }
+          );
+          const firstAt = oldest && oldest.first_at != null ? Number(oldest.first_at) : now;
+          return { ok: false, reason: "cap", retryAfterMs: Math.max(1000, firstAt + windowMs - now) };
+        }
+        await tx.run(
+          "INSERT INTO email_tokens (token_hash, user_id, purpose, created_at, expires_at, used_at) VALUES (@tokenHash, @userId, @purpose, @now, @expiresAt, NULL)",
+          { tokenHash, userId, purpose, now, expiresAt }
+        );
+        return { ok: true };
+      });
     },
 
     // ---- scores
-    // Keep the higher: one conditional UPDATE, atomic on every engine, so
-    // saves can arrive in any order, overlap or repeat without lowering a best.
-    // A save from before a Reset best score (older epoch) is ignored.
+    // Keep the higher, for the current epoch only: ONE conditional UPDATE
+    // (higher than the stored best AND the run's epoch is the account's
+    // current score_epoch). A single statement is atomic on every engine, so
+    // saves can arrive in any order, overlap or repeat without lowering a best,
+    // and a save from before a Reset best score (which bumps score_epoch in its
+    // own UPDATE of the same row) can never restore the old score, even when
+    // both run at the same moment. `epoch` is required (an integer).
     async submitScore(userId, score, difficulty, epoch, now = Date.now()) {
       return db.transaction(async (tx) => {
-        const current = await tx.get("SELECT best, score_epoch FROM player_scores WHERE user_id = @userId", { userId });
+        const result = await tx.run(
+          `UPDATE player_scores SET best = @score, best_difficulty = @difficulty, updated_at = @now
+           WHERE user_id = @userId AND best < @score AND score_epoch = @epoch`,
+          { score, difficulty, now, userId, epoch }
+        );
+        if (result.changes === 1) {
+          await bumpRevision(tx);
+          return { stale: false, improved: true };
+        }
+        // Nothing written; only say why (the outcome is already decided).
+        const current = await tx.get("SELECT score_epoch FROM player_scores WHERE user_id = @userId", { userId });
         if (!current) {
           return { stale: false, improved: false, missing: true };
         }
-        if (Number.isFinite(epoch) && epoch < Number(current.score_epoch)) {
-          return { stale: true, improved: false };
-        }
-        const result = await tx.run(
-          "UPDATE player_scores SET best = @score, best_difficulty = @difficulty, updated_at = @now WHERE user_id = @userId AND best < @score",
-          { score, difficulty, now, userId }
-        );
-        const improved = result.changes === 1;
-        if (improved) {
-          await bumpRevision(tx);
-        }
-        return { stale: false, improved };
+        return { stale: Number(current.score_epoch) !== epoch, improved: false };
       });
     },
 

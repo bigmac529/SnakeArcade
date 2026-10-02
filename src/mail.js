@@ -2,8 +2,9 @@
 // Outgoing email (verification and password reset links).
 // - SMTP mode (SMTP_HOST set): authenticated SMTP, e.g. the socha3.com
 //   mailbox: port 587 + STARTTLS (required, never plain text) or 465 + TLS.
-// - Outbox mode (no SMTP_HOST, for local dev and tests): each message is
-//   written as JSON to MAIL_OUTBOX_DIR instead of being sent.
+// - Outbox mode (no SMTP_HOST in local dev and tests; in production only with
+//   MAIL_TRANSPORT=outbox): each message is written as JSON to
+//   MAIL_OUTBOX_DIR instead of being sent.
 // Logs only ever show masked addresses.
 const fs = require("fs");
 const path = require("path");

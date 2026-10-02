@@ -99,13 +99,36 @@ function loadConfig(env = process.env, { loadFile = true } = {}) {
     problems.push("SESSION_SECRET must be at least 32 characters.");
   }
 
-  const dbClient = String(env.DB_CLIENT || "sqlite").toLowerCase();
+  // Local dev / tests default to SQLite. In production the database must be
+  // chosen explicitly: a missing DB_CLIENT would otherwise silently write
+  // accounts to a local SQLite file instead of SQL Server.
+  const dbClientRaw = String(env.DB_CLIENT || "").trim().toLowerCase();
+  if (production && !dbClientRaw) {
+    problems.push("DB_CLIENT is required in production (DB_CLIENT=mssql). Not falling back to a local SQLite file.");
+  }
+  const dbClient = dbClientRaw || "sqlite";
   if (!["sqlite", "mssql"].includes(dbClient)) {
     problems.push(`DB_CLIENT must be "sqlite" or "mssql" (got "${dbClient}").`);
+  } else if (production && dbClientRaw === "sqlite") {
+    warnings.push("DB_CLIENT=sqlite in production: accounts are stored in a local SQLite file, not SQL Server.");
   }
 
+  // Email: MAIL_TRANSPORT=smtp | outbox. Default: smtp when SMTP_HOST is set,
+  // otherwise outbox (emails written as files) - but production refuses to
+  // start without SMTP unless MAIL_TRANSPORT=outbox opts in explicitly, since
+  // players could sign up but never receive their confirmation link.
   const smtpHost = env.SMTP_HOST || "";
   const smtpPort = int(env.SMTP_PORT, 587);
+  const transportRaw = String(env.MAIL_TRANSPORT || "").trim().toLowerCase();
+  if (transportRaw && !["smtp", "outbox"].includes(transportRaw)) {
+    problems.push(`MAIL_TRANSPORT must be "smtp" or "outbox" (got "${transportRaw}").`);
+  }
+  const mailMode = transportRaw === "outbox" ? "outbox" : transportRaw === "smtp" || smtpHost ? "smtp" : "outbox";
+  if (mailMode === "smtp" && !smtpHost) {
+    problems.push("MAIL_TRANSPORT=smtp needs SMTP_HOST (plus SMTP_PORT, SMTP_USER, SMTP_PASSWORD).");
+  } else if (production && mailMode === "outbox" && transportRaw !== "outbox") {
+    problems.push("SMTP_HOST is required in production (emails would never reach players). To write emails to files instead, set MAIL_TRANSPORT=outbox.");
+  }
   const config = {
     root: ROOT,
     build: readBuildInfo(ROOT),
@@ -141,7 +164,7 @@ function loadConfig(env = process.env, { loadFile = true } = {}) {
       migrateOnStart: bool(env.DB_MIGRATE_ON_START, true)
     },
     mail: {
-      mode: smtpHost ? "smtp" : "outbox",
+      mode: mailMode,
       host: smtpHost,
       port: smtpPort,
       // true = TLS from the start (port 465); false = STARTTLS (port 587),
@@ -169,8 +192,8 @@ function loadConfig(env = process.env, { loadFile = true } = {}) {
     legacyDataFile: path.join(ROOT, "data", "settings.json")
   };
 
-  if (production && config.mail.mode === "outbox") {
-    warnings.push("SMTP_HOST is not set: emails are only written to the local outbox folder, nobody receives them.");
+  if (production && config.mail.mode === "outbox" && transportRaw === "outbox") {
+    warnings.push("MAIL_TRANSPORT=outbox: emails are only written to the local outbox folder, nobody receives them.");
   }
   if (dbClient === "mssql" && !config.db.connectionString && !config.db.server) {
     problems.push("DB_CLIENT=mssql needs DB_CONNECTION_STRING or DB_SERVER (+ DB_NAME, DB_USER, DB_PASSWORD).");
