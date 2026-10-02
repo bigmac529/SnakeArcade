@@ -1,0 +1,176 @@
+# Every push to main (= every merged PR): build an immutable release zip,
+# deploy it to the TEST site, and mark it as the build on test.
+# Production is never touched here; publish with "Deploy to production".
+#
+#   1. build (GitHub-hosted windows-latest): npm ci --omit=dev, package
+#      snakearcade-build-<run number>-<sha7>.zip (+ .sha256, build-info.json),
+#      sign build provenance, publish a release tagged build-<n>-<sha7>.
+#   2. deploy-test (self-hosted runner, environment "test"): deploy exactly that zip.
+#   3. mark-tested: add "deployed to **test**" to the release notes and
+#      "- tested" to its title. The build with the most recent such line is
+#      "latest-test", the default for production.
+# After publishing, only a release's title and notes are edited, so this works
+# with GitHub's immutable releases (Settings > General > Releases) turned on.
+#
+# SECURITY: the self-hosted runner lives on the production server. Never add a
+# pull_request / pull_request_target trigger. workflow_dispatch is limited to
+# main below (and to users with write access by GitHub).
+name: Build and deploy to test
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One pipeline at a time, in order. A newer push waiting in line replaces an
+# older waiting one (the newest merge wins); a running one is never cancelled.
+concurrency:
+  group: build-and-deploy-test
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.repository == 'bigmac529/SnakeArcade' && github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write      # create the build-<n>-<sha7> tag + release
+      id-token: write      # sign the build provenance attestation
+      attestations: write
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      sha256: ${{ steps.sha.outputs.sha256 }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Build name
+        id: meta
+        shell: pwsh
+        run: |
+          $sha7 = $env:GITHUB_SHA.Substring(0, 7)
+          $tag = "build-$($env:GITHUB_RUN_NUMBER)-$sha7"
+          # A re-run of this run finds its release already published: reuse it,
+          # never rebuild or replace published bytes.
+          gh release view $tag --json tagName 2>$null | Out-Null
+          $exists = if ($LASTEXITCODE -eq 0) { 'true' } else { 'false' }
+          $global:LASTEXITCODE = 0
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "tag=$tag`nexists=$exists`n")
+          Write-Host "Build $tag (release exists: $exists)"
+
+      - name: Checkout
+        if: steps.meta.outputs.exists != 'true'
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js (production uses Node 24)
+        if: steps.meta.outputs.exists != 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Unit tests for the build selector
+        if: steps.meta.outputs.exists != 'true'
+        shell: pwsh
+        run: node --test .github/scripts/resolve-build.test.mjs
+
+      - name: Install production dependencies
+        if: steps.meta.outputs.exists != 'true'
+        shell: pwsh
+        run: npm ci --omit=dev --no-audit --no-fund
+
+      - name: Package
+        id: pkg
+        if: steps.meta.outputs.exists != 'true'
+        shell: pwsh
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          ./.github/scripts/build-bundle.ps1 -SourceDir . -OutDir (Join-Path $env:RUNNER_TEMP 'dist') `
+            -Tag $env:TAG -Sha $env:GITHUB_SHA -Number ([int]$env:GITHUB_RUN_NUMBER) `
+            -Ref $env:GITHUB_REF -RunUrl "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+
+      - name: Sign build provenance
+        if: steps.meta.outputs.exists != 'true'
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: ${{ steps.pkg.outputs.zip }}
+
+      - name: Publish release
+        if: steps.meta.outputs.exists != 'true'
+        shell: pwsh
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          ZIP: ${{ steps.pkg.outputs.zip }}
+          ZIP_SHA256: ${{ steps.pkg.outputs.sha256 }}
+        run: |
+          $subject = (git log -1 --format=%s $env:GITHUB_SHA)
+          $run = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          $notes = @(
+            "Build **$env:TAG** of ``main``.", "",
+            "- Commit: $env:GITHUB_SHA ($subject)",
+            "- Built by: $run",
+            "- snakearcade-$env:TAG.zip SHA-256: ``$env:ZIP_SHA256``", "",
+            "Title without ""- tested"" = not yet deployed to test successfully. Production only takes tested builds (unless ""allow untested"" is ticked).", "",
+            "#### Deployments"
+          ) -join "`n"
+          $notesFile = Join-Path $env:RUNNER_TEMP 'notes.md'
+          [IO.File]::WriteAllText($notesFile, $notes + "`n")
+          # --latest=false: the "Latest" badge is not used (latest-test comes from the notes).
+          gh release create $env:TAG $env:ZIP "$env:ZIP.sha256" --target $env:GITHUB_SHA --latest=false `
+            --title "Build $env:GITHUB_RUN_NUMBER ($($env:GITHUB_SHA.Substring(0, 7)))" --notes-file $notesFile
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed ($LASTEXITCODE)" }
+
+      - name: Build SHA-256
+        id: sha
+        shell: pwsh
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          NEW_SHA256: ${{ steps.pkg.outputs.sha256 }}
+        run: |
+          $sum = $env:NEW_SHA256
+          if (-not $sum) {
+            $sum = ((gh release download $env:TAG --pattern "snakearcade-$env:TAG.zip.sha256" --output -) -split '\s+')[0]
+          }
+          if ($sum -notmatch '^[0-9a-f]{64}$') { throw "No SHA-256 for $env:TAG" }
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "sha256=$sum`n")
+
+  deploy-test:
+    needs: build
+    uses: ./.github/workflows/deploy-build.yml
+    with:
+      environment: test
+      tag: ${{ needs.build.outputs.tag }}
+      sha256: ${{ needs.build.outputs.sha256 }}
+    permissions:
+      contents: read
+
+  mark-tested:
+    needs: [build, deploy-test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write      # edit the release
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.build.outputs.tag }}
+    steps:
+      - name: Mark ${{ needs.build.outputs.tag }} as the build on test
+        run: |
+          set -euo pipefail
+          run="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          gh release view "$TAG" --json body --jq .body > notes.md
+          # This exact line format is what .github/scripts/resolve-build.mjs looks for.
+          printf -- '- %s: deployed to **test** (%s)\n' "$(date -u '+%Y-%m-%d %H:%M UTC')" "$run" >> notes.md
+          title=$(gh release view "$TAG" --json name --jq .name)
+          case "$title" in *" - tested") ;; *) title="$title - tested" ;; esac
+          gh release edit "$TAG" --title "$title" --notes-file notes.md
+          {
+            echo "### $TAG is on test"
+            echo
+            echo "It is now **latest-test**, the default for **Actions > Deploy to production**."
+          } >> "$GITHUB_STEP_SUMMARY"
