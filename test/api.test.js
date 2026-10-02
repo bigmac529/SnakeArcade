@@ -172,6 +172,18 @@ test("health reports the database dialect", async () => {
   assert.equal(r.body.build, undefined, "a plain checkout has no build-info.json");
 });
 
+test("a malformed Cookie header is ignored (signed out), not a crash", async () => {
+  const { parseCookies } = require("../src/auth/session");
+  assert.deepEqual(parseCookies("a=%; b=ok%20x; c=%E0%A4%A"), { b: "ok x" });
+  for (const value of ["x=%", `${require("../src/auth/session").cookieName(config)}=%E0%A4%A`]) {
+    const r = await fetch(`${base}/api/auth/me`, { headers: { Cookie: value } });
+    assert.equal(r.status, 200);
+    assert.equal((await r.json()).signedIn, false);
+  }
+  const h = await client().get("/api/health");
+  assert.equal(h.status, 200, "server still up");
+});
+
 test("health reports the release build when build-info.json exists", async () => {
   const { readBuildInfo } = require("../src/config");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "snake-build-"));

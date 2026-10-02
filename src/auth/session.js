@@ -19,7 +19,13 @@ function parseCookies(header) {
     if (eq > 0) {
       const key = part.slice(0, eq).trim();
       if (!(key in out)) {
-        out[key] = decodeURIComponent(part.slice(eq + 1).trim());
+        // A malformed value (e.g. "%") must not throw: one request with a bad
+        // Cookie header used to crash the whole process. Skip that cookie.
+        try {
+          out[key] = decodeURIComponent(part.slice(eq + 1).trim());
+        } catch {
+          // ignored: treated as absent (signed out)
+        }
       }
     }
   }
