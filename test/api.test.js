@@ -169,6 +169,24 @@ test("health reports the database dialect", async () => {
   assert.equal(r.status, 200);
   assert.equal(r.body.ok, true);
   assert.equal(r.body.db, db.dialect);
+  assert.equal(r.body.build, undefined, "a plain checkout has no build-info.json");
+});
+
+test("health reports the release build when build-info.json exists", async () => {
+  const { readBuildInfo } = require("../src/config");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "snake-build-"));
+  try {
+    assert.equal(readBuildInfo(dir), null);
+    fs.writeFileSync(path.join(dir, "build-info.json"), JSON.stringify({ tag: "build-7-abcdef1", number: 7, sha: "abcdef1".padEnd(40, "0"), builtAt: "2026-10-01T12:00:00Z", runUrl: "x" }));
+    const build = readBuildInfo(dir);
+    assert.deepEqual(build, { tag: "build-7-abcdef1", sha: "abcdef1".padEnd(40, "0"), builtAt: "2026-10-01T12:00:00Z" });
+    config.build = build;
+    const r = await client().get("/api/health");
+    assert.deepEqual(r.body.build, build);
+  } finally {
+    config.build = null;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("signup creates an unverified signed-in account and emails a link", async () => {

@@ -216,6 +216,8 @@ function createApp({ config, store, mailer, db, log = console }) {
         port: config.port,
         db: db.dialect,
         mail: mailer.mode,
+        // The deploy checks this against the build it just installed.
+        ...(config.build ? { build: config.build } : {}),
         time: new Date().toISOString()
       });
     })

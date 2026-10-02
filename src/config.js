@@ -55,6 +55,17 @@ function loadEnvFile(env) {
   return file;
 }
 
+// Which release build is running: build-info.json is written into every build
+// zip by the release pipeline (absent in a plain checkout).
+function readBuildInfo(root = ROOT) {
+  try {
+    const info = JSON.parse(fs.readFileSync(path.join(root, "build-info.json"), "utf8"));
+    return info && info.tag ? { tag: String(info.tag), sha: String(info.sha || ""), builtAt: String(info.builtAt || "") } : null;
+  } catch {
+    return null;
+  }
+}
+
 function bool(value, fallback) {
   if (value === undefined || value === "") {
     return fallback;
@@ -97,6 +108,7 @@ function loadConfig(env = process.env, { loadFile = true } = {}) {
   const smtpPort = int(env.SMTP_PORT, 587);
   const config = {
     root: ROOT,
+    build: readBuildInfo(ROOT),
     publicDir: path.join(ROOT, "public"),
     envFile,
     production,
@@ -168,4 +180,4 @@ function loadConfig(env = process.env, { loadFile = true } = {}) {
   return config;
 }
 
-module.exports = { loadConfig, parseEnvFile };
+module.exports = { loadConfig, parseEnvFile, readBuildInfo };

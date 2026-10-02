@@ -56,6 +56,15 @@ icacls "C:\WebApps\SnakeArcade-backups" /grant "svc-snakearcade:(OI)(CI)M"
 For the test site, do the same for `C:\WebApps\SnakeArcadeTest` and
 `C:\WebApps\SnakeArcadeTest-backups` (already done on socha3).
 
+With the accounts version, each deploy also runs database migrations with
+the site's env file, so the runner needs **Read** (not Modify) on each
+site's config folder:
+
+```powershell
+icacls "C:\WebApps\SnakeArcadeTest-config" /grant "svc-snakearcade:(OI)(CI)R"
+icacls "C:\WebApps\SnakeArcade-config"     /grant "svc-snakearcade:(OI)(CI)R"
+```
+
 `M` (Modify) is needed because the mirror deletes files that were removed
 from the repo. The account running `SnakeArcadeNode` keeps its existing
 access; new files inherit the folder ACL.
