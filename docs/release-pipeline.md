@@ -57,7 +57,7 @@ Same clicks, with an older tag from the Releases page as *Build to publish* (for
 - `data\` (player data), `web.config`, `logs\` and the env file are never touched by any deploy.
 - **Database migrations (after the accounts PR) are forward-only.** An older build runs against the newer schema. That is fine as long as migrations only add things. If a release ever changes or removes a column, note it in the PR, because rolling back past it needs a manual database step.
 
-## What happens when this PR merges
+## What happened when the pipeline PR (#12) merged
 
 - The merge is a push to `main`, so **Build and deploy to test** runs: it builds `build-<n>-<sha7>` and deploys it to the test site (the first deploy starts the stopped `SnakeArcadeTestNode` with an empty content root).
 - **Production is not touched.** It keeps its current version until the first **Deploy to production** run. The old `deploy.yml` (which deployed every push straight to production) is removed.
@@ -104,7 +104,8 @@ The defaults in `.github/workflows/deploy-build.yml` already match the table abo
 | `SERVICE_NAME` | `SnakeArcadeNode` | `SnakeArcadeTestNode` |
 | `APP_PORT` (must equal `PORT` in the service XML; `0` = read `PORT=` from the env file) | `3105` | `3107` |
 | `PUBLIC_URL` (site root; the public health check is `<PUBLIC_URL>api/health`) | `https://snakearcade.socha3.com/` | `https://test.snakearcade.socha3.com/` |
-| `ENV_FILE` | `<APP_ROOT>-config\snakearcade.env` | same rule |
+| `ENV_FILE` (read by the runner for migrations; `<APP_ROOT>-config\snakearcade.env` if only `APP_ROOT` is overridden) | `C:\WebApps\SnakeArcade-config\snakearcade.env` | `C:\WebApps\SnakeArcadeTest-config\snakearcade.env` |
+| `EXPECTED_DATABASE` (migrations refuse unless the env file's connections use it) | `SnakeArcade` | `SnakeArcadeTest` |
 | `BACKUP_ROOT` | `<APP_ROOT>-backups` | same rule |
 | `REQUIRE_PUBLIC_HEALTH` | `true` | `false` (only a warning) |
 
@@ -139,8 +140,8 @@ Done on socha3 (confirmed by the server admin):
 
 Still to do:
 
-- [ ] **Make HTTPS live**: add an `https` binding on `SnakeArcadeTest` for `test.snakearcade.socha3.com` with the Let's Encrypt certificate (SNI on). If you add an http to https redirect, keep `/.well-known/acme-challenge/` out of it, and keep the ACME rule above the proxy rule in `web.config`. Then check `https://test.snakearcade.socha3.com/api/health` answers `ok: true` and tell Michael, so he can set `REQUIRE_PUBLIC_HEALTH=true` on the `test` environment.
-- [ ] After the first test deploy (the first merge to `main` after this PR), check `SnakeArcadeTestNode` is Running and `http://localhost:3107/api/health` shows a `build` tag.
+- [x] **Make HTTPS live** (done, 2026-10: `https://test.snakearcade.socha3.com/api/health` answers `ok: true`; Michael can now set `REQUIRE_PUBLIC_HEALTH=true` on the `test` environment). Was: add an `https` binding on `SnakeArcadeTest` for `test.snakearcade.socha3.com` with the Let's Encrypt certificate (SNI on). If you add an http to https redirect, keep `/.well-known/acme-challenge/` out of it, and keep the ACME rule above the proxy rule in `web.config`. Then check `https://test.snakearcade.socha3.com/api/health` answers `ok: true` and tell Michael, so he can set `REQUIRE_PUBLIC_HEALTH=true` on the `test` environment.
+- [x] After the first test deploy (the first merge to `main` after this PR), check `SnakeArcadeTestNode` is Running and `http://localhost:3107/api/health` shows a `build` tag.
 - [ ] Optional: keep the test site out of search engines with a response header in the test `web.config`:
 
   ```xml
@@ -155,17 +156,90 @@ Still to do:
 
 - [ ] Optional: limit who can reach the test site (IIS IP restrictions), if it should not be public.
 
-When the accounts + database PR (#11) lands (until then the test site uses a local `data\settings.json` like production today):
+## Test site: database and accounts (before merging #11)
 
-- [ ] A **separate** database `SnakeArcadeTest` with its own logins (same roles as production, see `docs/database-setup.md`). Never point test at the production database.
-- [ ] `C:\WebApps\SnakeArcadeTest-config\snakearcade.env` with test values: its own `SESSION_SECRET` (never production's), `PUBLIC_BASE_URL=https://test.snakearcade.socha3.com`, `DB_*` for `SnakeArcadeTest`, `SMTP_*`/`MAIL_FROM` (a test sender, or leave `SMTP_HOST` empty to write emails to files), and `PORT=3107` (optional, must match the service).
-- [ ] Grant the runner **Read** on that folder so each deploy can run migrations and read settings before switching versions. LocalSystem (the service) already has access:
+Merging #11 deploys the accounts version to **test only** (production keeps running its current build until someone publishes to it). The accounts version needs the setup below. **Do it all before #11 is merged**: without a readable env file the test deploy fails in pre-flight and test keeps running its current build; with a wrong database name it fails before migrating. Production is not affected either way.
 
-  ```powershell
-  icacls C:\WebApps\SnakeArcadeTest-config /grant "svc-snakearcade:(OI)(CI)R"
-  ```
+1. **Database and logins** (SQL Server, as an admin; long random passwords):
 
-- [ ] Add `<env name="SNAKEARCADE_ENV_FILE" value="C:\WebApps\SnakeArcadeTest-config\snakearcade.env" />` to the `SnakeArcadeTestNode` XML and refresh the service. Do this only once the file exists: the app refuses to start if that variable names a missing file. With `NODE_ENV=production` and no settings (no `SESSION_SECRET`), the accounts version refuses to start, so test deploys fail until this is in place.
+   ```sql
+   CREATE DATABASE SnakeArcadeTest;
+   GO
+   CREATE LOGIN snakearcadetest_app      WITH PASSWORD = N'<test app password>',      CHECK_POLICY = ON;
+   CREATE LOGIN snakearcadetest_migrator WITH PASSWORD = N'<test migrator password>', CHECK_POLICY = ON;
+   GO
+   USE SnakeArcadeTest;
+   CREATE USER snakearcadetest_app      FOR LOGIN snakearcadetest_app;
+   CREATE USER snakearcadetest_migrator FOR LOGIN snakearcadetest_migrator;
+   ALTER ROLE db_datareader ADD MEMBER snakearcadetest_app;
+   ALTER ROLE db_datawriter ADD MEMBER snakearcadetest_app;
+   ALTER ROLE db_ddladmin   ADD MEMBER snakearcadetest_migrator;
+   ALTER ROLE db_datareader ADD MEMBER snakearcadetest_migrator;
+   ALTER ROLE db_datawriter ADD MEMBER snakearcadetest_migrator;
+   GO
+   ```
+
+   Never give the test logins access to `SnakeArcade` (production). SQL authentication and TCP/IP must be enabled (see `docs/database-setup.md` section 1).
+
+2. **Env file** `C:\WebApps\SnakeArcadeTest-config\snakearcade.env` (UTF-8, one `KEY=value` per line; quote a value that contains ` #`):
+
+   ```ini
+   NODE_ENV=production
+   PORT=3107
+   HOST=localhost
+   PUBLIC_BASE_URL=https://test.snakearcade.socha3.com
+
+   # 48 random bytes; NOT the production secret.
+   # node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+   SESSION_SECRET=<generate>
+
+   DB_CLIENT=mssql
+   DB_CONNECTION_STRING=Server=<SQLHOST>,1433;Database=SnakeArcadeTest;User Id=snakearcadetest_app;Password=<test app password>;Encrypt=true;TrustServerCertificate=true
+   DB_MIGRATION_CONNECTION_STRING=Server=<SQLHOST>,1433;Database=SnakeArcadeTest;User Id=snakearcadetest_migrator;Password=<test migrator password>;Encrypt=true;TrustServerCertificate=true
+   # The site never runs DDL; the deploy migrates with the migrator login.
+   DB_MIGRATE_ON_START=false
+
+   SMTP_HOST=<SMTP host>
+   SMTP_PORT=587
+   SMTP_SECURE=false
+   SMTP_USER=<mailbox, e.g. no-reply@socha3.com>
+   SMTP_PASSWORD=<mailbox or app password>
+   MAIL_FROM=SnakeArcade Test <no-reply@socha3.com>
+   ```
+
+   - `<SQLHOST>`: `localhost` if SQL Server is on this machine; named instance: `Server=localhost\INSTANCE` (no `,1433`). Use `TrustServerCertificate=true` only for SQL Server's self-signed certificate on the same machine / trusted network.
+   - A password containing `;` goes in braces: `Password={pa;ss}`.
+   - No real mail on test? Leave out the `SMTP_*` lines **and add `MAIL_TRANSPORT=outbox`**: emails are then written to `C:\WebApps\SnakeArcadeTest\data\outbox\` instead of being sent (sign-up confirmation links can be copied from there). Without `MAIL_TRANSPORT=outbox`, an empty `SMTP_HOST` makes the site refuse to start (`NODE_ENV=production` requires real mail unless the outbox is chosen explicitly).
+   - `DB_CLIENT=mssql` must stay: in production the site refuses to start without `DB_CLIENT` (there is no fallback to a local SQLite file).
+
+3. **Folder access.** The runner reads the file during each deploy (migrations, port check); LocalSystem (the service) can already read it:
+
+   ```powershell
+   icacls C:\WebApps\SnakeArcadeTest-config /grant "svc-snakearcade:(OI)(CI)R"
+   ```
+
+   Nobody else besides Administrators and SYSTEM should have access.
+
+4. **Service setting, only after step 2's file exists** (the app refuses to start if this names a missing file). In `C:\Tools\WinSW\SnakeArcadeTestNode.xml`, inside `<service>`:
+
+   ```xml
+   <env name="SNAKEARCADE_ENV_FILE" value="C:\WebApps\SnakeArcadeTest-config\snakearcade.env" />
+   ```
+
+   No reload command is needed: WinSW (2.12.0, which has no `refresh` command) re-reads the XML every time the service starts, so the edit takes effect at the next service start: the deploy's restart (or `Restart-Service SnakeArcadeTestNode` if you need it now). Here there's no need to restart by hand: the running build (no accounts) ignores the file, and the next deploy restarts it.
+
+5. **Migrations: nothing to run by hand.** The test deploy runs them before stopping the service, with `DB_MIGRATION_CONNECTION_STRING`, after checking that both connections really point at `SnakeArcadeTest`. Optional check before merging, from any extracted accounts build (or a clone of the PR branch with `npm ci --omit=dev`):
+
+   ```powershell
+   $env:SNAKEARCADE_ENV_FILE = "C:\WebApps\SnakeArcadeTest-config\snakearcade.env"
+   node scripts\migrate.js --expect-database=SnakeArcadeTest --check
+   ```
+
+   It should print both connections as `database SnakeArcadeTest` and list the pending migrations (exit code 1 = migrations pending, which is expected).
+
+6. **Tell Michael it's done**, then he merges #11. Afterwards: the **Build and deploy to test** run is green, `https://test.snakearcade.socha3.com/api/health` shows `"db":"mssql"`, the new `build` tag and `"mail":"smtp"` (or `"outbox"`), and sign-up, email confirmation, a game and the board work. Problems show in `SnakeArcadeTestNode.out.log` / `.err.log` (`[config]`, `[db]`, `[mail]`).
+
+Optional: SPF/DKIM for the sender domain (production needs it anyway, `docs/database-setup.md` section 3) and importing the old test board (`npm run import-legacy`, section 6; usually not needed for test).
 
 ## Files
 

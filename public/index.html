@@ -32,17 +32,26 @@
         </div>
       </div>
 
-      <div class="player-panel">
+      <!-- Account: sign up / sign in, or who is signed in. Start stays disabled until
+           the account's email is confirmed. -->
+      <div class="player-panel account-panel" id="account-panel" data-state="loading">
         <div class="player-row">
-          <label class="player-name" for="player-name">
-            <span>Player name</span>
-            <input id="player-name" type="text" maxlength="24" autocomplete="nickname" placeholder="Your name (PG, 2+ chars)" spellcheck="false">
-          </label>
-          <div class="settings-actions">
-            <button id="save-settings" type="button">Save name</button>
+          <div class="account-who">
+            <span class="account-label">Player</span>
+            <span class="account-name-line">
+              <strong id="account-name">Checking…</strong>
+              <span class="account-badge" id="account-badge" hidden>Email not confirmed</span>
+            </span>
+          </div>
+          <div class="settings-actions account-actions">
+            <button id="account-signup" class="primary-btn" type="button" aria-haspopup="dialog" hidden>Sign up</button>
+            <button id="account-signin" type="button" aria-haspopup="dialog" hidden>Sign in</button>
+            <button id="account-resend" class="primary-btn" type="button" hidden>Resend email</button>
+            <button id="account-edit-name" type="button" aria-haspopup="dialog" hidden>Edit name</button>
+            <button id="account-signout" type="button" hidden>Sign out</button>
           </div>
         </div>
-        <p class="name-hint" id="name-hint">Pick a PG name, tap Save name, then Start. Guest / empty names can’t play.</p>
+        <p class="name-hint" id="account-hint" aria-live="polite">Checking your account…</p>
       </div>
 
       <div class="toolbar">
@@ -74,7 +83,7 @@
       </div>
 
       <p class="help" id="help">
-        Turn: on-screen Left / Right, or <kbd>←</kbd> / <kbd>→</kbd> or <kbd>A</kbd> / <kbd>D</kbd> (relative to the snake) · Pause: <kbd>P</kbd> / Space · Sound: <kbd>M</kbd> · Start: after Save name · End game: stops the run · Difficulty: pick before Start · Double tap = tight U-turn · Settings (gear): turn guide, turn cell marker, turn eagerness · Full screen: <kbd>F</kbd>, exit with <kbd>Esc</kbd>
+        Turn: on-screen Left / Right, or <kbd>←</kbd> / <kbd>→</kbd> or <kbd>A</kbd> / <kbd>D</kbd> (relative to the snake) · Pause: <kbd>P</kbd> / Space · Sound: <kbd>M</kbd> · Start: after you sign in and confirm your email · End game: stops the run · Difficulty: pick before Start · Double tap = tight U-turn · Settings (gear): turn guide, turn cell marker, turn eagerness · Full screen: <kbd>F</kbd>, exit with <kbd>Esc</kbd>
       </p>
       <div id="status" class="sr-only" aria-live="polite"></div>
 
@@ -98,8 +107,8 @@
             <div class="canvas-wrap" id="canvas-wrap">
               <canvas id="game" width="640" height="640" tabindex="0" aria-label="Snake play field"></canvas>
               <div id="overlay" class="overlay">
-                <h2>Save a name</h2>
-                <p>Pick a PG name (2+ characters), tap Save name, then Start.</p>
+                <h2>Loading…</h2>
+                <p>Checking your account.</p>
                 <button id="overlay-start" type="button">Start game</button>
               </div>
             </div>
@@ -124,14 +133,14 @@
             <button id="arcade-board-retry" class="board-retry" type="button" hidden>Retry</button>
           </div>
           <ol id="arcade-board-list" class="board-list"></ol>
-          <p class="board-foot">Scores sync from the server JSON. Crown goes to the hungriest snake.</p>
+          <p class="board-foot">Best scores are saved to each player’s account. Crown goes to the hungriest snake.</p>
         </aside>
       </div>
     </section>
   </main>
 
   <!-- Settings dialog. Display preferences are per browser (localStorage), not sent to the
-       server; Reset best score changes the saved player's best on the server too. -->
+       server; Reset best score changes the signed-in account's best on the server. -->
   <div class="modal-backdrop" id="settings-backdrop" hidden>
     <div class="modal" id="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title" aria-describedby="settings-desc">
       <h2 id="settings-title">Settings</h2>
@@ -173,7 +182,7 @@
         <div class="reset-row" id="reset-best-row">
           <span class="reset-text">
             <span class="switch-title" id="reset-best-title">Best score</span>
-            <span class="switch-hint" id="reset-best-hint">Resets the best for the saved name only.</span>
+            <span class="switch-hint" id="reset-best-hint">Resets the best for your account only.</span>
           </span>
           <button class="danger-btn" id="reset-best" type="button" aria-describedby="reset-best-hint">Reset best score</button>
         </div>
@@ -192,7 +201,100 @@
     </div>
   </div>
 
+  <!-- Account dialog: one view at a time. -->
+  <div class="modal-backdrop" id="account-backdrop" hidden>
+    <div class="modal account-modal" id="account-dialog" role="dialog" aria-modal="true" aria-labelledby="account-title">
+      <h2 id="account-title">Sign in</h2>
+
+      <form id="form-signup" class="account-form" novalidate hidden>
+        <p class="modal-desc">Free. We only use your email to confirm it’s you and to reset your password. It’s never shown on the board.</p>
+        <label class="field" for="signup-email"><span>Email</span>
+          <input id="signup-email" data-field="email" type="email" autocomplete="email" inputmode="email" maxlength="254" required spellcheck="false" autocapitalize="off">
+        </label>
+        <label class="field" for="signup-name"><span>Display name</span>
+          <input id="signup-name" data-field="displayName" type="text" autocomplete="nickname" maxlength="24" required spellcheck="false" aria-describedby="signup-name-hint">
+          <small id="signup-name-hint">Shown on the arcade board. 2–24 characters, PG only.</small>
+        </label>
+        <label class="field" for="signup-password"><span>Password</span>
+          <input id="signup-password" data-field="password" data-password type="password" autocomplete="new-password" minlength="10" maxlength="200" required aria-describedby="signup-password-hint">
+          <small id="signup-password-hint">At least 10 characters. A short phrase works well.</small>
+        </label>
+        <label class="show-password"><input type="checkbox"> Show password</label>
+        <p class="form-msg" role="alert"></p>
+        <div class="modal-actions">
+          <button type="button" data-close>Cancel</button>
+          <button type="submit" class="primary-btn">Create account</button>
+        </div>
+        <p class="form-switch">Have an account? <button type="button" class="link-btn" data-view="signin">Sign in</button></p>
+      </form>
+
+      <form id="form-signin" class="account-form" novalidate hidden>
+        <label class="field" for="signin-email"><span>Email</span>
+          <input id="signin-email" data-field="email" type="email" autocomplete="username" inputmode="email" maxlength="254" required spellcheck="false" autocapitalize="off">
+        </label>
+        <label class="field" for="signin-password"><span>Password</span>
+          <input id="signin-password" data-field="password" data-password type="password" autocomplete="current-password" maxlength="200" required>
+        </label>
+        <label class="show-password"><input type="checkbox"> Show password</label>
+        <p class="form-msg" role="alert"></p>
+        <div class="modal-actions">
+          <button type="button" data-close>Cancel</button>
+          <button type="submit" class="primary-btn">Sign in</button>
+        </div>
+        <p class="form-switch"><button type="button" class="link-btn" data-view="forgot">Forgot password?</button> · New here? <button type="button" class="link-btn" data-view="signup">Sign up</button></p>
+      </form>
+
+      <form id="form-forgot" class="account-form" novalidate hidden>
+        <p class="modal-desc">Enter your account’s email and we’ll send a link to choose a new password.</p>
+        <label class="field" for="forgot-email"><span>Email</span>
+          <input id="forgot-email" data-field="email" type="email" autocomplete="email" inputmode="email" maxlength="254" required spellcheck="false" autocapitalize="off">
+        </label>
+        <p class="form-msg" role="alert"></p>
+        <div class="modal-actions">
+          <button type="button" data-view="signin">Back</button>
+          <button type="submit" class="primary-btn">Email me a link</button>
+        </div>
+      </form>
+
+      <form id="form-reset" class="account-form" novalidate hidden>
+        <p class="modal-desc">Pick a new password. You’ll be signed out on your other devices.</p>
+        <label class="field" for="reset-password"><span>New password</span>
+          <input id="reset-password" data-field="password" data-password type="password" autocomplete="new-password" minlength="10" maxlength="200" required aria-describedby="reset-password-hint">
+          <small id="reset-password-hint">At least 10 characters.</small>
+        </label>
+        <label class="show-password"><input type="checkbox"> Show password</label>
+        <p class="form-msg" role="alert"></p>
+        <div class="modal-actions">
+          <button type="button" data-close>Cancel</button>
+          <button type="submit" class="primary-btn">Set new password</button>
+        </div>
+      </form>
+
+      <form id="form-name" class="account-form" novalidate hidden>
+        <p class="modal-desc">Your best score stays with your account when you change your name.</p>
+        <label class="field" for="name-input"><span>Display name</span>
+          <input id="name-input" data-field="displayName" type="text" autocomplete="nickname" maxlength="24" required spellcheck="false" aria-describedby="name-input-hint">
+          <small id="name-input-hint">2–24 characters, PG only. Must not be taken.</small>
+        </label>
+        <p class="form-msg" role="alert"></p>
+        <div class="modal-actions">
+          <button type="button" data-close>Cancel</button>
+          <button type="submit" class="primary-btn">Save name</button>
+        </div>
+      </form>
+
+      <form id="form-message" class="account-form" novalidate hidden>
+        <p class="message-text" id="message-text"></p>
+        <p class="form-msg" role="alert"></p>
+        <div class="modal-actions">
+          <button type="submit" class="primary-btn">OK</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <script src="settings.js"></script>
+  <script src="account.js"></script>
   <script src="game.js"></script>
 </body>
 </html>

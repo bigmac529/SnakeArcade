@@ -12,7 +12,11 @@
 #                          PORT in the service XML)       (set to 0 to read PORT= from ENV_FILE)
 #   PUBLIC_URL             site root; health check is     https://snakearcade.socha3.com/ /
 #                          <PUBLIC_URL>api/health         https://test.snakearcade.socha3.com/
-#   ENV_FILE               settings/secrets file          <APP_ROOT>-config\snakearcade.env
+#   ENV_FILE               settings/secrets file, read by C:\WebApps\SnakeArcade-config\snakearcade.env /
+#                          the runner for migrations      C:\WebApps\SnakeArcadeTest-config\snakearcade.env
+#   EXPECTED_DATABASE      SQL Server database the env    SnakeArcade / SnakeArcadeTest
+#                          file must point at (checked
+#                          before migrating)
 #   BACKUP_ROOT            data backups                   <APP_ROOT>-backups
 #   REQUIRE_PUBLIC_HEALTH  fail if PUBLIC_URL isn't       true / false (the local health check on
 #                          healthy                        localhost:<APP_PORT> is always required)
@@ -65,6 +69,7 @@ jobs:
       VAR_ENV_FILE: ${{ vars.ENV_FILE }}
       VAR_BACKUP_ROOT: ${{ vars.BACKUP_ROOT }}
       VAR_REQUIRE_PUBLIC_HEALTH: ${{ vars.REQUIRE_PUBLIC_HEALTH }}
+      VAR_EXPECTED_DATABASE: ${{ vars.EXPECTED_DATABASE }}
       # Used only if node.exe is not already on the runner's PATH.
       NODE_DIR: 'C:\Program Files\nodejs'
     steps:
@@ -85,10 +90,12 @@ jobs:
           $ErrorActionPreference = "Stop"
           switch ($env:TARGET) {
             "production" {
-              $d = @{ root = 'C:\WebApps\SnakeArcade'; service = 'SnakeArcadeNode'; port = '3105'; url = 'https://snakearcade.socha3.com/'; require = 'true' }
+              $d = @{ root = 'C:\WebApps\SnakeArcade'; service = 'SnakeArcadeNode'; port = '3105'; url = 'https://snakearcade.socha3.com/'; require = 'true'
+                      envFile = 'C:\WebApps\SnakeArcade-config\snakearcade.env'; database = 'SnakeArcade' }
             }
             "test" {
-              $d = @{ root = 'C:\WebApps\SnakeArcadeTest'; service = 'SnakeArcadeTestNode'; port = '3107'; url = 'https://test.snakearcade.socha3.com/'; require = 'false' }
+              $d = @{ root = 'C:\WebApps\SnakeArcadeTest'; service = 'SnakeArcadeTestNode'; port = '3107'; url = 'https://test.snakearcade.socha3.com/'; require = 'false'
+                      envFile = 'C:\WebApps\SnakeArcadeTest-config\snakearcade.env'; database = 'SnakeArcadeTest' }
             }
             default { throw "Unknown environment '$env:TARGET' (expected test or production)." }
           }
@@ -96,7 +103,10 @@ jobs:
           $service = if ($env:VAR_SERVICE_NAME) { $env:VAR_SERVICE_NAME } else { $d.service }
           $port = if ($env:VAR_APP_PORT) { $env:VAR_APP_PORT } else { $d.port }
           $url = if ($env:VAR_PUBLIC_URL) { $env:VAR_PUBLIC_URL } else { $d.url }
-          $envFile = if ($env:VAR_ENV_FILE) { $env:VAR_ENV_FILE } else { "$root-config\snakearcade.env" }
+          # If APP_ROOT is overridden without ENV_FILE, follow it (<APP_ROOT>-config).
+          $envFile = if ($env:VAR_ENV_FILE) { $env:VAR_ENV_FILE } elseif ($env:VAR_APP_ROOT) { "$root-config\snakearcade.env" } else { $d.envFile }
+          $database = if ($env:VAR_EXPECTED_DATABASE) { $env:VAR_EXPECTED_DATABASE } else { $d.database }
+          if ($database -notmatch '^[A-Za-z0-9_]+$') { throw "EXPECTED_DATABASE '$database' is not a plain database name." }
           $backup = if ($env:VAR_BACKUP_ROOT) { $env:VAR_BACKUP_ROOT } else { "$root-backups" }
           $require = if ($env:VAR_REQUIRE_PUBLIC_HEALTH) { $env:VAR_REQUIRE_PUBLIC_HEALTH } else { $d.require }
           if (-not $url) { throw "Set the PUBLIC_URL variable on the '$env:TARGET' environment (Settings > Environments > $env:TARGET)." }
@@ -106,7 +116,7 @@ jobs:
           if ($require -notin @('true', 'false')) { throw "REQUIRE_PUBLIC_HEALTH must be true or false (got '$require')." }
           $lines = @(
             "DEPLOY_APP_ROOT=$root", "DEPLOY_SERVICE=$service", "DEPLOY_PORT=$port", "DEPLOY_URL=$url",
-            "DEPLOY_ENV_FILE=$envFile", "DEPLOY_BACKUP_ROOT=$backup", "DEPLOY_REQUIRE_PUBLIC=$require"
+            "DEPLOY_ENV_FILE=$envFile", "DEPLOY_DATABASE=$database", "DEPLOY_BACKUP_ROOT=$backup", "DEPLOY_REQUIRE_PUBLIC=$require"
           )
           [IO.File]::AppendAllText($env:GITHUB_ENV, (($lines -join "`n") + "`n"))
           [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "public_url=$url`n")
@@ -146,6 +156,7 @@ jobs:
             '-PublicUrl', $env:DEPLOY_URL,
             '-BackupRoot', $env:DEPLOY_BACKUP_ROOT,
             '-EnvFile', $env:DEPLOY_ENV_FILE,
+            '-ExpectedDatabase', $env:DEPLOY_DATABASE,
             '-ExpectedBuild', $env:BUILD_TAG
           )
           if ($env:DEPLOY_REQUIRE_PUBLIC -eq 'true') { $deployArgs += '-RequirePublicHealthy' }
@@ -161,6 +172,7 @@ jobs:
             "| Site | $env:DEPLOY_URL |",
             "| Content root | ``$env:DEPLOY_APP_ROOT`` |",
             "| Service | ``$env:DEPLOY_SERVICE`` |",
+            "| Env file / database | ``$env:DEPLOY_ENV_FILE`` / ``$env:DEPLOY_DATABASE`` |",
             "| Zip SHA-256 | ``$env:BUILD_SHA256`` |"
           )
           [IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, (($md -join "`n") + "`n"))

@@ -17,10 +17,13 @@
   Steps:
     1. Pre-flight checks (paths, service, robocopy, node_modules present,
        env file).
-    1b. If the build has database migrations (scripts\migrate.js) and the env
-       file exists: apply them from the build folder BEFORE stopping the
-       service. A failed migration fails the deploy with the old version still
-       running. Skipped with -SkipMigrations.
+    1b. If the build has database migrations (scripts\migrate.js): apply them
+       from the build folder BEFORE stopping the service, with the site's env
+       file (DB_MIGRATION_CONNECTION_STRING = the migrator login), after
+       checking that the connections point at -ExpectedDatabase. A failed
+       migration, a wrong database or a missing/unreadable env file fails the
+       deploy with the old version still running. Skipped with
+       -SkipMigrations.
     2. Stop the WinSW service (default SnakeArcadeNode).
     3. Back up data\settings.json outside the content root.
     4. Mirror the checkout into the content root with robocopy /MIR.
@@ -78,6 +81,13 @@ param(
   # SMTP_*, PORT once the app reads it). Optional for builds without accounts.
   [string]$EnvFile = "",
   [switch]$SkipMigrations,
+  # SQL Server database this site must use (SnakeArcade / SnakeArcadeTest).
+  # Migrations refuse to run when the env file's connections point elsewhere.
+  [string]$ExpectedDatabase = "",
+  # A database build normally needs a readable env file (fails before anything
+  # is stopped). Only for a service that gets all settings from WinSW <env>
+  # entries: deploy anyway; the service then migrates on start.
+  [switch]$AllowNoEnvFile,
   # Build tag (build-<n>-<sha7>) the deploy must end up running; checked against
   # build-info.json in AppRoot and against /api/health when the app reports it.
   [string]$ExpectedBuild = "",
@@ -227,6 +237,7 @@ try {
   Write-Host "BackupRoot  : $BackupRoot"
   Write-Host "EnvFile     : $EnvFile$(if ($EnvFile -and -not $haveEnvFile) { ' (not found)' })"
   Write-Host "Build       : $(if ($ExpectedBuild) { $ExpectedBuild } else { '(not checked)' })"
+  Write-Host "Database    : $(if ($ExpectedDatabase) { $ExpectedDatabase } else { '(not checked)' })"
   Write-Host "DryRun      : $DryRun"
 
   # Guard rails: never mirror onto a drive root, onto the source, or into/over each other.
@@ -259,8 +270,16 @@ try {
   if (-not (Test-Path -LiteralPath $robocopy -PathType Leaf)) {
     throw "robocopy.exe not found at $robocopy."
   }
-  if ($buildHasMigrations -and -not $haveEnvFile) {
-    Write-Warning "This build uses a database, but there is no env file at '$EnvFile'. The service must get NODE_ENV, SESSION_SECRET, DB_* and SMTP_* from its WinSW <env> entries instead, or it will refuse to start."
+  if ($buildHasMigrations -and -not $haveEnvFile -and -not $SkipMigrations) {
+    $who = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $msg = "This build uses a database, but the env file '$EnvFile' does not exist or is not readable by $who. Create it and grant this account Read on its folder (docs\database-setup.md), then re-run. Nothing was stopped or copied."
+    if ($AllowNoEnvFile) {
+      Write-Warning "$msg (continuing: -AllowNoEnvFile; the service must get NODE_ENV, SESSION_SECRET, DB_* and SMTP_* from its WinSW <env> entries)"
+    } elseif ($DryRun) {
+      Write-Warning "$msg (a real deploy stops here)"
+    } else {
+      throw $msg
+    }
   }
   if ($ExpectedBuild) {
     $srcInfo = Join-Path $SourceDir "build-info.json"
@@ -349,7 +368,9 @@ try {
       if (-not $env:NODE_ENV) { $env:NODE_ENV = "production" }
       Push-Location $SourceDir
       try {
-        & node.exe scripts\migrate.js
+        $migrateArgs = @("scripts\migrate.js")
+        if ($ExpectedDatabase) { $migrateArgs += "--expect-database=$ExpectedDatabase" }
+        & node.exe @migrateArgs
         $migrateExit = $LASTEXITCODE
       } finally {
         Pop-Location
