@@ -231,8 +231,14 @@
     btnSignout.disabled = true;
     const res = await api("POST", "/api/auth/logout", {});
     btnSignout.disabled = false;
-    if (!res.ok && res.status !== 0) {
-      note(res.data.message || "Couldn’t sign out.", "error");
+    if (!res.ok) {
+      // Includes network errors (status 0): the request may never have reached
+      // the server, so the session cookie is still valid. Keep showing the
+      // signed-in state rather than claiming a sign-out a reload would undo.
+      note(
+        res.status === 0 ? "Couldn’t reach the server, so you’re still signed in. Check your connection and try again." : res.data.message || "Couldn’t sign out.",
+        "error"
+      );
       return;
     }
     setSignedOut();

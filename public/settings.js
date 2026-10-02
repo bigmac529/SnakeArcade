@@ -24,15 +24,25 @@
 
   // Sound and difficulty are per browser. (Names and best scores live on the
   // account now; older caches' playerName / best fields are ignored.)
+  // Storage can be blocked (privacy settings, sandboxed frames): even reading
+  // window.localStorage then throws. Never let that stop the game.
+  function storageGet(key) {
+    try {
+      return window.localStorage.getItem(key);
+    } catch (_) {
+      return null;
+    }
+  }
+
   function loadPrefs() {
     let raw = null;
     try {
-      raw = JSON.parse(localStorage.getItem(SETTINGS_KEY) || localStorage.getItem(LEGACY_SETTINGS_KEY) || "null");
+      raw = JSON.parse(storageGet(SETTINGS_KEY) || storageGet(LEGACY_SETTINGS_KEY) || "null");
     } catch (_) {
       raw = null;
     }
     return {
-      muted: raw ? Boolean(raw.muted) : localStorage.getItem(LEGACY_MUTE) === "1",
+      muted: raw ? Boolean(raw.muted) : storageGet(LEGACY_MUTE) === "1",
       difficulty: normalizeDifficulty(raw && raw.difficulty)
     };
   }
